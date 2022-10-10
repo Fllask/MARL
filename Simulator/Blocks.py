@@ -211,18 +211,12 @@ class Slide(Interface):
                 if c == 3:
                     pass
                 deltai = b.corners[c]-b.corners[c-1]
-                # if abs(self.alphaf-b.angles[c])<self.eps:
-                #     #check for another slide connection
-                #     pass
-                #else:
                 if abs(deltai[0])<self.eps:
                     slopi = deltai[1]/self.eps
                 else:
                     slopi = deltai[1]/deltai[0]
                 for m in range(4):
                     deltam = self.blockm.corners[m]-self.blockm.corners[m-1]
-                    # xs = self.side_side_overlap(deltam, deltai,
-                    #                             b.corners[c-1]-self.start_p + self.c1m - self.blockm.corners[m-1], self.l)
                     xc = corner_corner_intersection(self.start_p - self.c1m + self.blockm.corners[m],
                                                     b.corners[c],
                                                     self.l)
@@ -233,44 +227,31 @@ class Slide(Interface):
                                            self.blockm.angles[m],
                                            (b.angles[c-1])%(2*np.pi)-np.pi,
                                            b.angles[c])
-                    if not False:#xs:
                         
-                        #--------side-corner---------
-                        
-                        x = side_corner_intersection(b.corners[c-1], deltai, 
-                                                     self.start_p + self.blockm.corners[m]-self.c1m, self.l, 1,0)
-                        
-                        if type(x) is not bool:
-                            if abs(x-0.6)<0.001:
-                                pass
-                            #print(f"intersection at {x=}: side: n° {(c-1)%4} obstacle {ib}, corner {m} of mobile")
-                            # self.update_bounds(x,self.l,deltai)
-                            self.update_bounds(x,
-                                                np.arctan2(self.l[1],self.l[0]),
-                                                (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
-                                                self.blockm.angles[m],
-                                                (b.angles[c-1])%(2*np.pi)-np.pi,
-                                                b.angles[c-1])
-                        elif x:
-                            
-                            pass
-                        
-                        
-                        
-                        #corner-side
-                        x = side_corner_intersection(self.start_p - self.c1m + self.blockm.corners[m-1],deltam,
-                                                      b.corners[c],-self.l, 1, 0)
-                        
-                        if type(x) is not bool:
-                        
-                            #print(f"intersection at {x=}: side: n° {(m-1)%4} of mobile, corner {c} of obstacle {ib}")
-                            self.update_bounds(x,
-                                                np.arctan2(self.l[1],self.l[0]),
-                                                (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
-                                                self.blockm.angles[m-1],
-                                                (b.angles[c-1])%(2*np.pi)-np.pi,
-                                                b.angles[c])
-                        
+                    #--------side-corner---------
+                    
+                    x = side_corner_intersection(b.corners[c-1], deltai, 
+                                                 self.start_p + self.blockm.corners[m]-self.c1m, self.l, 1,0)
+                    
+                    if type(x) is not bool:
+                        self.update_bounds(x,
+                                            np.arctan2(self.l[1],self.l[0]),
+                                            (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
+                                            self.blockm.angles[m],
+                                            (b.angles[c-1])%(2*np.pi)-np.pi,
+                                            b.angles[c-1])
+                    #corner-side
+                    x = side_corner_intersection(self.start_p - self.c1m + self.blockm.corners[m-1],deltam,
+                                                  b.corners[c],-self.l, 1, 0)
+                    if type(x) is not bool:
+                        #print(f"intersection at {x=}: side: n° {(m-1)%4} of mobile, corner {c} of obstacle {ib}")
+                        self.update_bounds(x,
+                                            np.arctan2(self.l[1],self.l[0]),
+                                            (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
+                                            self.blockm.angles[m-1],
+                                            (b.angles[c-1])%(2*np.pi)-np.pi,
+                                            b.angles[c])
+                    
 
     def update_bounds(self,x,phi,alpha0m,alpha1m,alpha0o,alpha1o):
         
@@ -384,21 +365,24 @@ class Slide(Interface):
             
       
             
-    def update_bounds_side_corner(self,x,phi,alpha0m,alpha1m,alpha0o,alpha1o):
+      
         
-        if (((alpha1m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha1m-alpha1o)%(np.pi*2) > np.pi+self.eps) and
-            ((alpha0m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha0m-alpha1o)%(np.pi*2)>np.pi+self.eps) and
-            ((alpha0o - phi)%(np.pi*2) < np.pi and (alpha1o - phi)%(np.pi*2) >np.pi)):
+      
+    # def update_bounds_side_corner(self,x,phi,alpha0m,alpha1m,alpha0o,alpha1o):
+        
+    #     if (((alpha1m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha1m-alpha1o)%(np.pi*2) > np.pi+self.eps) and
+    #         ((alpha0m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha0m-alpha1o)%(np.pi*2)>np.pi+self.eps) and
+    #         ((alpha0o - phi)%(np.pi*2) < np.pi and (alpha1o - phi)%(np.pi*2) >np.pi)):
        
-            self.max_list.append(x)
-        if (((alpha1m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha1m-alpha1o)%(np.pi*2)>np.pi+self.eps) and
-            ((alpha0m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha0m-alpha1o)%(np.pi*2)>np.pi+self.eps) and
-            ((alpha0o - phi)%(np.pi*2) > np.pi and (alpha1o - phi)%(np.pi*2) <np.pi)):
-            self.min_list.append(x)
-        if abs(alpha0o-phi)<self.eps and alpha1m-phi > self.eps and alpha0m-phi > self.eps:
-            self.smin_list.append(x)
-        if abs(abs(alpha1o)-np.pi)< self.eps and alpha1m-phi > self.eps and (alpha0m-phi)%(2*np.pi) < np.pi - self.eps:
-            self.smax_list.append(x)
+    #         self.max_list.append(x)
+    #     if (((alpha1m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha1m-alpha1o)%(np.pi*2)>np.pi+self.eps) and
+    #         ((alpha0m-alpha0o)%(np.pi*2) < np.pi-self.eps  or (alpha0m-alpha1o)%(np.pi*2)>np.pi+self.eps) and
+    #         ((alpha0o - phi)%(np.pi*2) > np.pi and (alpha1o - phi)%(np.pi*2) <np.pi)):
+    #         self.min_list.append(x)
+    #     if abs(alpha0o-phi)<self.eps and alpha1m-phi > self.eps and alpha0m-phi > self.eps:
+    #         self.smin_list.append(x)
+    #     if abs(abs(alpha1o)-np.pi)< self.eps and alpha1m-phi > self.eps and (alpha0m-phi)%(2*np.pi) < np.pi - self.eps:
+    #         self.smax_list.append(x)
     def find_valid(self):
         if len(self.n_obst)==0:
             self.valid_range = [[0,1]]
