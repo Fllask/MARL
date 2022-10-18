@@ -30,7 +30,8 @@ def draw_block(ax,block,label_corners = False,**kwarg):
             art.append(ax.annotate(str(i),c))
     return art
 def draw_contact(ax,block):
-    pass
+    if block.x is not None:
+        pass
 def draw_interface(ax,inter:Interface,n=None,label_corners=False):
     art = []
     if inter.x is not None:
@@ -86,10 +87,10 @@ def check_intersection(ax):
     #             ]
     # [b.turn(np.pi/4,[3.9,4.5]) for b in obstacles]
     obstacles= [ 
-        Block([[6,4],[7,5]]).expand(),
-        Block([[2,5],[3,6]]).expand(),
+        #Block([[6,4],[7,5]]).expand(),
+        #Block([[2,5],[3,6]]).expand(),
         Block([[7,4.5],[8,6]]).expand(),
-        Block([[3,4],[4,5]]).expand()
+        #Block([[3,4],[4,5]]).expand()
         ]
     [b.turn(0*np.pi/4,[6,5]) for b in obstacles]
     [b.turn(a,[4.5,4.5]) for b in obstacles]
@@ -108,7 +109,7 @@ def check_intersection(ax):
 def check_intersection2(ax):
     #create a sliding interface
     blockf = Block([[0,0],[3,0],[2,1],[1,1]])
-    a = -0*np.pi/2
+    a = np.pi/2
     c=0.6
     blockf.move([0,0],[4,4])
     blockf.turn(a,[4.5,4.5])
@@ -126,7 +127,7 @@ def check_intersection2(ax):
         ]
     # [b.turn(-np.pi/2,[4.5,4.5]) for b in obstacles]
     # [b.move([0,6],[4,4]) for b in obstacles]
-    [b.turn(np.pi) for b in obstacles]
+    [b.turn(np.pi-0.01) for b in obstacles]
     [b.move([-3,0],[6,5]) for b in obstacles]
     [b.turn(a,[4.5,4.5]) for b in obstacles]
     i = Slide(blockm,blockf,2,2,safe = True)

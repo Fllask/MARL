@@ -126,6 +126,20 @@ class Block():
                                 corners_centered[:,0]*np.sin(angle)+
                                 corners_centered[:,1]*np.cos(angle)],axis=1)
         self.corners = corners_rot+center
+class pivot():
+    def __init__(self,pos, mode, valid_range, block1,block2):
+        self.pos = pos
+        self.x = x
+        self.valid = False
+    def set_mode(self,mode):
+        assert mode == 'f' or mode == 'm','unkwnown pivot mode'
+        self.mode = mode
+        
+        
+    def validate(self,x):
+        if self.mode == 'fpoint':
+            if abs(x-self.x)<self.eps:
+                self.valid = True
 
 class Interface(metaclass=abc.ABCMeta):
     def __init__(self, blockm:Block, blocksf:list):
@@ -155,7 +169,7 @@ class Slide(Interface):
         self.slide_list = []
         self.smin_list = []
         self.smax_list =[]
-        
+        self.pivot_list = []
         self.n_obst = [0]
         self.alphaf = self.blocksf[0].angles[self.facef]
         self.completed = False
@@ -206,53 +220,169 @@ class Slide(Interface):
         return discrete_x
     def complete(self,blocks:list):
         self.complete = True
+        
+        pivot_l = []
         for ib,b in enumerate(blocks):
+            #tocheck: define wich side are stil to check
+            intersect = np.zeros((4,4),dtype=bool)
+            tocheck = np.ones((2,4,4),dtype=bool)
             for c in range(4):
-                if c == 3:
-                    pass
-                deltai = b.corners[c]-b.corners[c-1]
-                if abs(deltai[0])<self.eps:
-                    slopi = deltai[1]/self.eps
-                else:
-                    slopi = deltai[1]/deltai[0]
                 for m in range(4):
-                    deltam = self.blockm.corners[m]-self.blockm.corners[m-1]
-                    xc = corner_corner_intersection(self.start_p - self.c1m + self.blockm.corners[m],
+                    
+                    start_m = self.start_p - self.c1m + self.blockm.corners[m]
+                    x = corner_corner_intersection(start_m,
                                                     b.corners[c],
                                                     self.l)
-                    if type(xc) is not bool:
-                        self.update_bounds(xc,
+                    
+                    if type(x) is not bool:
+                        self.update_range(x,
                                            np.arctan2(self.l[1],self.l[0]),
                                            (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
                                            self.blockm.angles[m],
                                            (b.angles[c-1])%(2*np.pi)-np.pi,
                                            b.angles[c])
+                        intersect[m,c]=True
                         
-                    #--------side-corner---------
-                    
-                    x = side_corner_intersection(b.corners[c-1], deltai, 
-                                                 self.start_p + self.blockm.corners[m]-self.c1m, self.l, 1,0)
-                    
-                    if type(x) is not bool:
-                        self.update_bounds(x,
-                                            np.arctan2(self.l[1],self.l[0]),
-                                            (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
-                                            self.blockm.angles[m],
-                                            (b.angles[c-1])%(2*np.pi)-np.pi,
-                                            b.angles[c-1])
-                    #corner-side
-                    x = side_corner_intersection(self.start_p - self.c1m + self.blockm.corners[m-1],deltam,
-                                                  b.corners[c],-self.l, 1, 0)
-                    if type(x) is not bool:
-                        #print(f"intersection at {x=}: side: n° {(m-1)%4} of mobile, corner {c} of obstacle {ib}")
-                        self.update_bounds(x,
-                                            np.arctan2(self.l[1],self.l[0]),
-                                            (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
-                                            self.blockm.angles[m-1],
-                                            (b.angles[c-1])%(2*np.pi)-np.pi,
-                                            b.angles[c])
-                    
 
+            (idxm,idxc)= np.where(intersect)
+            
+            for c in idxc:
+                for m in idxm:
+                    if intersect[m-1,c]:
+                        #create a mranged pivottocheck[:,m,c]=False
+                        tocheck[0,m-1,:]=False
+                        
+                        
+                    if intersect[m,c-1]:
+                        #create a franged pivottocheck[:,m,c]=False
+                        tocheck[1,:,c-1]=False
+                        
+                    elif (not intersect[(m+1)%4,c] and not intersect[m,(c+1)%4]
+                          and not intersect[m-1,c]):
+                        #create a fpoint pivot
+                        pass
+                
+            for c in range(4):
+                deltai = b.corners[c]-b.corners[c-1]
+                for m in range(4):
+                    deltam = self.blockm.corners[m]-self.blockm.corners[m-1]
+                    
+                          
+                        
+                    if tocheck[0,m,c]:
+                    #--------sideo-cornerm---------
+                    
+                        x = side_corner_intersection(b.corners[c-1], deltai, 
+                                                     start_m, self.l, 1-self.eps,self.eps)
+                        
+                        if type(x) is not bool:
+                            #p = pivot(x,start_m+x*self.l)
+                            self.update_range(x,
+                                                np.arctan2(self.l[1],self.l[0]),
+                                                (self.blockm.angles[m])%(2*np.pi)-np.pi,
+                                                self.blockm.angles[m],
+                                                (b.angles[c-1])%(2*np.pi)-np.pi,
+                                                b.angles[c])
+                    if m == 1 and c == 3:
+                        pass
+                    if tocheck[1,m,c]:
+                        #cornero-sidem
+                        
+                        x = side_corner_intersection(start_m,deltam,
+                                                      b.corners[c],-self.l, 1-self.eps,self.eps)
+                        if type(x) is not bool:
+                            #p=pivot(x,start_m+self.l*x)
+                            #print(f"intersection at {x=}: side: n° {(m-1)%4} of mobile, corner {c} of obstacle {ib}")
+                            self.update_range(x,
+                                                np.arctan2(self.l[1],self.l[0]),
+                                                (self.blockm.angles[m-1])%(2*np.pi)-np.pi,
+                                                self.blockm.angles[m],
+                                                (b.angles[c])%(2*np.pi)-np.pi,
+                                                b.angles[c])
+                    
+    def update_range(self,candidate_x,phi,alpha0m,alpha1m,alpha0o,alpha1o):
+        angles = np.array([alpha0m,alpha1o,alpha0o,alpha1m])
+        order = np.argsort(angles)
+        if np.all(((order-order[0])%4 == [0,1,2,3])):
+            #check if phi is equal to a side
+            isequal = abs(angles-phi)%(2*np.pi) <self.eps
+            if np.sum(isequal) >1:
+                return False
+            if isequal[0]:
+                invphi = (phi)%(2*np.pi)-np.pi
+                if (invphi -alpha0o+self.eps)%(2*np.pi)>np.pi:
+                    self.min_list.append(candidate_x)
+                    return True
+                else: 
+                    return False
+            if isequal[3]:
+                invphi = (phi)%(2*np.pi)-np.pi
+                if (invphi -alpha1o+self.eps)%(2*np.pi)>np.pi:
+                    self.min_list.append(candidate_x)
+                    return True
+                else: 
+                    return False
+            if isequal[1]:
+                invphi = (phi)%(2*np.pi)-np.pi
+                if (invphi -alpha0m-self.eps)%(2*np.pi)>np.pi:
+                    self.max_list.append(candidate_x)
+                    return True
+                else: 
+                    return False
+            if isequal[2]:
+                invphi = (phi)%(2*np.pi)-np.pi
+                if (invphi -alpha1m-self.eps)%(2*np.pi)>np.pi:
+                    self.max_list.append(candidate_x)
+                    return True
+                else: 
+                    return False
+            # if isequal[0] or isequal[3]:
+            #     #check if phi+pi is between alpha1o and alpha0o
+            #      invphi = (phi)%(2*np.pi)-np.pi
+            #      if (((invphi - alpha1m-self.eps)%(2*np.pi)<np.pi and (invphi - alpha0m+self.eps)%(2*np.pi)>np.pi) or
+            #          ((invphi - alpha0m-self.eps)%(2*np.pi)<np.pi and (invphi - alpha1m+self.eps)%(2*np.pi)>np.pi)):
+            #          self.min_list.append(candidate_x)
+            #          return True
+            #      else:
+            #          return False
+            # if isequal[1] or isequal[2]:
+            #     #check if phi+pi is between alpha1m and alpha0m
+            #      invphi = (phi)%(2*np.pi)-np.pi
+            #      if (((invphi - alpha1o-self.eps)%(2*np.pi)<np.pi and (invphi - alpha0o+self.eps)%(2*np.pi)>np.pi) or
+            #          ((invphi - alpha0o-self.eps)%(2*np.pi)<np.pi and (invphi - alpha1o+self.eps)%(2*np.pi)>np.pi)):
+            #          self.max_list.append(candidate_x)
+            #          return True
+            #      else:
+            #          return False
+            
+            pos = np.searchsorted(angles[order],phi)%4
+            
+            if order[pos] == 0:
+                #phi is between alpha0m and alpha1m
+                self.min_list.append(candidate_x)
+                return True
+            elif order[pos] == 2:
+                #phi is between alpha0o and alpha1o
+                self.max_list.append(candidate_x)
+                return True
+            elif order[pos]==1:
+                #phi is between alpha0m and alpha1o
+                if (alpha1m-phi+np.pi+self.eps)%(2*np.pi)>np.pi:
+                    self.max_list.append(candidate_x)
+                    return True
+                elif (alpha0o-phi+np.pi-self.eps)%(2*np.pi)<np.pi:
+                    self.min_list.append(candidate_x)
+                    return True
+            elif order[pos]==3:
+                if (alpha0m-phi+np.pi+self.eps)%(2*np.pi)>np.pi:
+                    self.min_list.append(candidate_x)
+                    return True
+                elif (alpha1o-phi+np.pi-self.eps)%(2*np.pi)<np.pi:
+                    self.max_list.append(candidate_x)
+                    return True
+        return False
+            
+                
     def update_bounds(self,x,phi,alpha0m,alpha1m,alpha0o,alpha1o):
         
         #check for degenerate angles
@@ -361,7 +491,7 @@ class Slide(Interface):
                 return False
                 
                
-    
+        
             
       
             
@@ -580,8 +710,136 @@ class Hang(Interface):
         pass
     def complete(self,blocks:list):
         pass
+class Grid():
+    def __init__(self,maxs):
+        self.occ = np.zeros((maxs[0],maxs[1],2),dtype=int)
+        self.neighbours = np.zeros((maxs[0]+1,maxs[1]+1,2,3),dtype=int)
+    def put(self,block,pos0,rot,bid,floating=False):
+        #if bid < 0: the block is held by robot -bid
+        block.turn(rot)
+        block.move(pos0)
+        #test if the block is in the grid
+        if (np.min(block.parts)<0 or
+            np.max(block.parts[:,0])>=self.occ.shape[0] or
+            np.max(block.parts[:,1])>=self.occ.shape[1]):
+            return False
+        #test if the is no overlap
+        if np.any(self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]):
+            return False
+        else:
+            #check if there is a connection (ask for at least 1 points)
+            #if floating or np.any(same_side(block.neigh, np.array(np.where(self.neighbours)).T)):
+            if not floating:
+                candidates = switch_direction(block.neigh)
+                if not np.any(self.neighbours[candidates[:,0],candidates[:,1],candidates[:,2],candidates[:,3]]):
+                    return False
+            #if floating or np.any(switch_direction(block.neigh)np.array(np.where(self.neighbours)).T)):
+                #addd the block
+            self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=bid
+            
+            self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3]]=bid
+            return True
+            # else:
+            #     return False
+def same_side(sides1,sides2):
+    #check if the 3rd and 4rth coord are compatible
+    ret = np.zeros((sides1.shape[0],sides2.shape[0]),dtype=bool)
+    ret[((np.expand_dims(sides1[:,3],1) == 0) &
+          (np.expand_dims(sides2[:,3],0) == 0) &
+          (np.expand_dims(sides1[:,0],1) == np.expand_dims(sides2[:,0],0)) &
+          (np.expand_dims(sides1[:,1],1) == np.expand_dims(sides2[:,1],0)) )]=True
+    ret[((np.expand_dims(sides1[:,3],1) == 1) &
+          (np.expand_dims(sides2[:,3],0) == 1) &
+          (np.expand_dims(sides1[:,0],1) == np.expand_dims(sides2[:,0],0)) &
+          (np.expand_dims(sides1[:,1]-2*sides1[:,2]+1,1) == np.expand_dims(sides2[:,1],0)))]=True
+    ret[((np.expand_dims(sides1[:,3],1) == 2) &
+          (np.expand_dims(sides2[:,3],0) == 2) &
+          (np.expand_dims(sides1[:,0]+sides1[:,2]*2-1,1) == np.expand_dims(sides2[:,0],0)) &
+          (np.expand_dims(sides1[:,1]-sides1[:,2]*2+1,1) == np.expand_dims(sides2[:,1],0)))]=True
+
+    ret[np.expand_dims(sides1[:,2],1) == np.expand_dims(sides2[:,2],0)]=False
+    return ret
+def switch_direction(sides):
+    ret = np.zeros((sides.shape[0],4),dtype=int)
     
+    ret[sides[:,3]==0,:2]=sides[sides[:,3]==0,:2]
     
+    ret[sides[:,3]==1,0]=sides[sides[:,3]==1,0]
+    ret[sides[:,3]==1,1]=sides[sides[:,3]==1,1]-2*sides[sides[:,3]==1,2]+1
+    
+    ret[sides[:,3]==2,0]=sides[sides[:,3]==2,0]+2*sides[sides[:,3]==2,2]-1
+    ret[sides[:,3]==2,1]=sides[sides[:,3]==2,1]-2*sides[sides[:,3]==2,2]+1
+    
+    ret[:,2]=(sides[:,2]+1)%2
+    ret[:,3]=sides[:,3]
+    return ret
+class discret_block():
+    def __init__(self,parts,density=1,muc=0):
+        self.parts = np.array(parts)
+        self.neigh = np.zeros((3*self.parts.shape[0],4),dtype=int)
+        self.neigh[:,:3] =np.tile(self.parts,(3,1))
+        self.neigh[:self.parts.shape[0],3] = 0
+        self.neigh[self.parts.shape[0]:2*self.parts.shape[0],3] = 1
+        self.neigh[2*self.parts.shape[0]:,3] = 2
+        same = same_side(self.neigh,self.neigh)
+        self.neigh = self.neigh[~np.any(same,axis=0)]
+        self.mass = density*self.parts.shape[0]
+        self.muc = muc
+    def turn(self,time,center=None):
+        if center is None:
+            center = self.parts[0,:2]
+        if time == 0:
+            return
+        elif time==1:
+            rot_mat = np.array([[0,1],
+                                [-1,1]])
+            rem_zero = np.array([[1,-1]])
+            add_one = np.array([[0,0]])
+        elif time ==2:
+            rot_mat = np.array([[-1,1],
+                                [-1,0]])
+            rem_zero = np.array([[1,0]])
+            add_one = np.array([[-1,1]])
+        elif time ==3:
+            rot_mat = np.array([[-1,0],
+                                [0,-1]])
+            
+            rem_zero = np.array([[1,0]])
+            add_one = np.array([[-1,0]])
+        elif time ==4:
+            rot_mat = np.array([[0,-1],
+                                [1,-1]])
+            
+            rem_zero = np.array([[-2,2]])
+            add_one = np.array([[1,-1]])
+        elif time ==5:
+            rot_mat = np.array([[1,-1],
+                                [1,0]])
+            
+            rem_zero = np.array([[0,0]])
+            add_one = np.array([[0,-1]])
+        
+        nparts = np.zeros((self.parts.shape[0],3))
+        nparts[:,:2] = (self.parts[:,:2] -center) @ rot_mat  + center
+        nparts[:,:2]=nparts[:,:2] + rem_zero * np.expand_dims((self.parts[:,2]-1),1) + add_one * np.expand_dims((self.parts[:,2]),1)
+        nparts[:,2]=(self.parts[:,2]+time)%2
+        self.parts = nparts.astype(int)
+        
+        #rotate the sides:
+        nneigh = np.zeros((self.neigh.shape[0],4))
+        nneigh[:,:2] = (self.neigh[:,:2] -center) @ rot_mat  + center
+        nneigh[:,:2]=nneigh[:,:2] + rem_zero * np.expand_dims((self.neigh[:,2]-1),1) + add_one * np.expand_dims((self.neigh[:,2]),1)
+        nneigh[:,2]=(self.neigh[:,2]+time)%2
+        nneigh[:,3]= (self.neigh[:,3]-time)%3
+        self.neigh = nneigh.astype(int)
+        
+    def move(self,new_p):
+        
+        delta =new_p-self.parts[0,:-1]
+        self.parts[:,:-1] = self.parts[:,:-1]+delta
+        self.neigh[:,:2]=self.neigh[:,:2]+delta
+        #use real coordonates
+        #self.cm = self.cm + delta @ 
 def norm(x):
     return np.sqrt(np.sum(np.square(x)))
 def cross(x,y):
