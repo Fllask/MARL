@@ -4,7 +4,7 @@ Created on Mon Sep 19 09:55:31 2022
 
 @author: valla
 """
-from scipy import 
+from scipy.optimize import linprog 
 from Blocks import discret_block as Block, Grid, switch_direction
 import numpy as np
 import time 
@@ -21,51 +21,186 @@ class stability_solver_discrete():
         self.F_max = F_max
         self.nr = n_robots
         self.A = np.diag(np.ones(self.nr*6))
-        self.A[1::2,1::2]=-self.A[1::2,1::2]
-        self.b = np.zeros((self.nr*6,1))
+        
+        self.b = np.zeros(self.nr*6)
         self.b[np.arange(self.nr)*6]=Fx_robot[1]
-        self.b[np.arange(self.nr)*6+1]=Fx_robot[0]
+        self.b[np.arange(self.nr)*6+1]=-Fx_robot[0]
         self.b[np.arange(self.nr)*6+2]=Fy_robot[1]
-        self.b[np.arange(self.nr)*6+3]=Fy_robot[0]
+        self.b[np.arange(self.nr)*6+3]=-Fy_robot[0]
         self.b[np.arange(self.nr)*6+4]=M_robot[1]
-        self.b[np.arange(self.nr)*6+5]=M_robot[0]
+        self.b[np.arange(self.nr)*6+5]=-M_robot[0]
         
-        self.c = np.ones((self.nr*6,1))*10
+        self.c = np.ones(self.nr*6)
         self.Aeq = np.zeros((0,self.nr*6))
-        self.beq = np.zeros((self.nr*6,1))
-        self.block = np.zeros((self.nr*6),dtype=int)
+        self.beq = np.zeros(0)
+        self.block = np.zeros((0),dtype=int)
+        self.rowid = np.zeros((0),dtype=int)
+        
+    def add_block(self,grid,block,bid):
+        #get all the potential supports:
+        pot_sup = switch_direction(block.neigh)
+        sup = pot_sup[np.nonzero(grid.neighbours[pot_sup[:,0],pot_sup[:,1],pot_sup[:,2],pot_sup[:,3]])]
+        ncorners = sup.shape[0]*2
+        #get a list of all concerned blocks
+        list_sup = np.unique(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3]])
         
         
-    def add_block(self,grid,block,bid,base=False,held=False):
-        self.block = np.concatenate([self.block,bid*np.ones(2*n_sup)])
-        self.beq = np.concatenate([self.beq, [block.mass,get_cm(block.parts)[0]]])
-        #chage the equilibrium of the support blocks
+       
         
-        sup = np.nonzero(grid.neigh)
-        self.A = np.concatenate([self.A, np.zeros(self.A.shape[0],])
+        
+        
+        nAeqcorner = np.zeros((3,ncorners*3))
+        
+        
+        sup0idx_s = np.nonzero(sup[:,3]==0)
+        sup0idx = np.repeat(6*sup0idx_s[0],2)
+        sup0idx[1::2]=sup0idx[::2]+3
+        
+        sup1idx_s = np.nonzero(sup[:,3]==1)
+        sup1idx = np.repeat(6*sup1idx_s[0],2)
+        sup1idx[1::2]=sup1idx[::2]+3
+        
+        sup2idx_s = np.nonzero(sup[:,3]==2)
+        sup2idx = np.repeat(6*sup2idx_s[0],2)
+        sup2idx[1::2]=sup2idx[::2]+3
+        #first modify the Fx components
+        #take care of the Fs
+        nAeqcorner[0,sup0idx]=0
+        nAeqcorner[0,sup1idx]=-np.sqrt(3)/2
+        nAeqcorner[0,sup2idx]=np.sqrt(3)/2
+        
+        #take care of the Ffp
+        nAeqcorner[0,sup0idx+1]=1
+        nAeqcorner[0,sup1idx+1]=0.5
+        nAeqcorner[0,sup2idx+1]=-0.5
+        
+        #now the Fy components:
+        #Fs
+        nAeqcorner[1,sup0idx]=1
+        nAeqcorner[1,sup1idx]=-0.5
+        nAeqcorner[1,sup2idx]=-0.5
+        
+        #Ffp
+        nAeqcorner[1,sup0idx+1]=0
+        nAeqcorner[1,sup1idx+1]=np.sqrt(3)/2
+        nAeqcorner[1,sup2idx+1]=-np.sqrt(3)/2
+        
+        #compute the postion of each corner:
+        pos = side2corners(sup)
+        pos0 = pos[sup0idx_s]
+        pos1 = pos[sup1idx_s]
+        pos2 = pos[sup2idx_s]
+        if bid ==8:
+            pass
+        for idxi, posi in zip([sup0idx_s[0],sup1idx_s[0],sup2idx_s[0]],[pos0,pos1,pos2]):
+            numberp=len(idxi)
+            if numberp==0:
+                continue
+            for j,b in enumerate(idxi):
+                idxj = b*6+np.arange(3)
+                nAeqcorner[2,idxj]=nAeqcorner[1,idxj]*posi[j,0,0]-nAeqcorner[0,idxj]*posi[j,0,1]
+                nAeqcorner[2,idxj+3]=nAeqcorner[1,idxj]*posi[j,1,0]-nAeqcorner[0,idxj]*posi[j,1,1]
+        
+        
+        
+        
+        #take care of Ffm for all of the lines
+        nAeqcorner[:,2::3]=-nAeqcorner[:,1::3]
+        
+        #switch the side of the up triangles
+        sup_up = np.repeat(np.nonzero(sup[:,2]==0),6)
+        sup_up = np.nonzero(sup[:,2]==0)
+        sup_up = np.ravel(np.expand_dims(6*sup_up[0],1)+np.expand_dims(np.arange(6),0))
+        nAeqcorner[:,sup_up]=-nAeqcorner[:,sup_up]
+        
+        
+        #change the equilibrium of the support blocks
+        nAeqcol = np.zeros((self.Aeq.shape[0],ncorners*3))
+        
+        for supid in list_sup:
+            if supid == 1:
+                #index reserved to the ground, ignore
+                continue
+            #dont ask, dont tell, go fast
+            idxs = np.nonzero(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3]]==supid)
+            idxs = np.ravel(np.expand_dims(6*idxs[0],1)+np.expand_dims(np.arange(6),0))
+            for i,row in enumerate(np.nonzero(self.rowid==supid)[0]):
+                nAeqcol[row,idxs] = -nAeqcorner[i,idxs]
+        
+        
+        #fill the matrix
+        nAeqrow = np.zeros((3,self.Aeq.shape[1]))
+        
+        self.Aeq = np.block([[self.Aeq, nAeqcol],[nAeqrow,nAeqcorner]])
+        
+        
+        #add an index of the row:
+        self.rowid = np.concatenate([self.rowid,bid*np.ones(3,dtype=int)])
+        
+        self.beq = np.concatenate([self.beq, [0,block.mass,block.mass*get_cm(block.parts)[0]]])
+        
+        
+        
+        #add the friction constraints (Ffp+Ffn - Fs*muc <=0)
+        Acorner = np.zeros((ncorners,3*ncorners))
+        Acorner[np.arange(ncorners),np.arange(ncorners)*3]=-block.muc
+        Acorner[np.arange(ncorners),np.arange(ncorners)*3+1]=1
+        Acorner[np.arange(ncorners),np.arange(ncorners)*3+2]=1
+        self.A = np.block([[self.A, np.zeros((self.A.shape[0],3*ncorners))],
+                           [np.zeros((ncorners,self.A.shape[1])),Acorner]])
+        
+        
+        self.b = np.concatenate([self.b, np.zeros(ncorners)])
+        
+        self.c = np.concatenate([self.c,np.ones(ncorners*3)])
+                                 
     def hold_block(self,bid,rid):
-        self.Aeq[:,self.bid2boolarr(bid)]
+        row0 = np.nonzero(self.rowid==bid)[0][0]
+        self.Aeq[row0:row0+3,rid:rid+6]= [[1,-1,0,0,0,0],
+                                            [0,0,1,-1,0,0],
+                                            [0,0,0,0,1,-1]]
     def leave_block(self,rid):
-        self.A[:,rid:rid+6]=0
         self.Aeq[:,rid:rid+6]=0
         
-    def bid2boolarr(self,bid):
-        
-        
+    def bid2boolarr(self,bid,idx='row'):
         return np.nonzero(self.block==bid)
     def solve(self):
-        pass
-def buildA():
-    pass
-def buildC(rFx,rFy,rm,fs,ff,m):
-    c = np.ones(rFx.shape[0]+rFy.shape[0])
-def buildB():
-    pass
-def buildAeq():
-    pass
-def buildvec(rFx,rFy,rm,fs,ff,m):
-    pass
+        return linprog(self.c,self.A,self.b,self.Aeq,self.beq)
     
+
+
+def side2Aeq(sides):
+    #given an array of sides, return an array of coefficients to get Fx and Fy from 
+    #Fs, Ffp and Ffm
+    coefs = np.zeros(sides.shape[0]*3,3)
+    sides0idxs = np.nonzero(sides[:,3]==0)
+    pos0 = np.tile(grid2real(sides[sides0idxs]),)
+    coefs[sides0idxs*3,:]= np.tile([0,1,-1,0,1,-1],sides0idxs.shape[0])
+    coefs[sides0idxs*3+1,:]=np.tile([1,0,0,1,0,0],sides0idxs.shape[0])
+    coefs[sides0idxs*3+2,:]=0
+    return coefs
+    
+def side2corners(sides):
+    #return the real coordinates of the two corners of the sides
+    #note that p1(side)==p1(switch direction(side))
+    
+    #switch the direction of all down triangles:
+    upsides = np.copy(sides)
+    upsides[sides[:,2]==1,:]=switch_direction(sides[sides[:,2]==1,:])
+    #first put each corner at the leftest point
+    corners = grid2real(upsides)
+    corners = np.stack([corners,corners],axis=1)
+    corners[upsides[:,3]==0,1,:] = corners[upsides[:,3]==0,1,:]+[1,0]
+    corners[upsides[:,3]==1,0,:] = corners[upsides[:,3]==1,0,:]+[1,0]
+    corners[upsides[:,3]==1,1,:] = corners[upsides[:,3]==1,1,:]+[0.5,np.sqrt(3)/2]
+    corners[upsides[:,3]==2,0,:] = corners[upsides[:,3]==2,0,:]+[0.5,np.sqrt(3)/2]
+    return corners
+def grid2real(parts):
+    #return the coordinate of the leftmost point of the triangle
+    r_parts = np.zeros((parts.shape[0],2))
+    r_parts[:,0] = parts[:,0]+parts[:,1]*0.5
+    r_parts[:,1] = parts[:,1]*np.sqrt(3)/2
+    return r_parts
 def get_cm(parts):
     # parts = parts - parts[0,:]
     c_parts = np.zeros((parts.shape[0],2))
@@ -77,20 +212,20 @@ if __name__ == '__main__':
     print("Start physics test")
     maxs = [9,6]
     t00 = time.perf_counter()
-    ph_mod = stability_solver_discrete(maxs,n_robot=2,n_block_max=10)
+    ph_mod = stability_solver_discrete(maxs,n_robots=0)
     grid = Grid(maxs)
     t = Block([[0,0,0]])
+    tr = Block([[1,1,1],[1,1,0],[1,2,1]],muc=0.7)
     # ground = Block([[i,0,1] for i in range(maxs[0])])
     # hinge = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
     # link = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
-    ground = Block([[0,0,0],[2,0,0],[6,0,0],[8,0,0]]+[[i,0,1] for i in range(3,maxs[0])])
-    hinge = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
-    link = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
+    ground = Block([[0,0,0],[2,0,0],[6,0,0],[8,0,0]]+[[i,0,1] for i in range(0,maxs[0])],muc=0.5)
+    hinge = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7)
+    link = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7)
     #build an arch: the physics simulator should only result in a pass if 
     #no block is missing
     
     
-    # grid.put(link,[0,2],0,3)
     # grid.put(hinge,[1,3],0,4)
     # grid.put(link,[1,5],5,5)
     # grid.put(hinge,[4,3],0,6)
@@ -103,12 +238,45 @@ if __name__ == '__main__':
     #grid.put(t,[0,0],0,1,floating=True)
     #ph_mod.add_block(grid,t,1,base = True)
     grid.put(ground,[0,0],0,1,floating=True)
-    ph_mod.add_block(grid, ground, 1,base=True)
     t11 = time.perf_counter()        
     print(f"The ground was put in {t11-t10}s")
     t20 = time.perf_counter()
     grid.put(hinge,[1,0],0,2)
-    ph_mod.add_block(grid, hinge, 2,held=1)
+    ph_mod.add_block(grid,hinge, 2)
+    #ph_mod.hold_block(2, 0)
     t21 = time.perf_counter()
-    print(f'block 1 solved in {t21-t20}s')
+    print(f'block 2 put in {t21-t20}s')
+    t200 = time.perf_counter()
+    res2 = ph_mod.solve()
+    t201 = time.perf_counter()
+    print(f'block 2 solved in {t201-t200}s ({res2.success=})')
+    
+    t30 = time.perf_counter()
+    grid.put(link,[0,2],0,3)
+    ph_mod.add_block(grid,link, 3)
+    #ph_mod.hold_block(3, 0)
+    res3 = ph_mod.solve()
+    t31 = time.perf_counter()
+    print(f'block 3 put and solved in {t31-t30}s ({res3.success=})')
+    grid.put(hinge,[1,3],0,4)
+    ph_mod.add_block(grid,hinge, 4)
+    res4 = ph_mod.solve()
+    
+    grid.put(link,[1,5],5,5)
+    ph_mod.add_block(grid,link, 5)
+    res5 = ph_mod.solve()
+    
+    grid.put(hinge,[4,3],0,6)
+    ph_mod.add_block(grid,hinge, 6)
+    res6 = ph_mod.solve()
+    
+    grid.put(link,[5,3],5,7)
+    ph_mod.add_block(grid,link, 7)
+    res7 = ph_mod.solve()
+    
+    grid.put(hinge,[7,0],0,8)
+    ph_mod.add_block(grid,hinge, 8)
+    res8 = ph_mod.solve()
+    print(f'Test Passed: {res8.success}\n total time: {time.perf_counter()-t10}s')
+    
     print("End physics test")
