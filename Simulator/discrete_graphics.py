@@ -122,6 +122,7 @@ if __name__ == "__main__":
     fig,ax = draw_grid(maxs,steps=1,color='k',label_points=True,h=30)
     t = Block([[0,0,1],[0,0,0]])
     ground = Block([[0,0,0],[2,0,0],[6,0,0],[8,0,0]]+[[i,0,1] for i in range(0,maxs[0])])
+    #ground = Block([[0,0,0],[maxs[0]-1,0,0]]+[[i,0,1] for i in range(0,maxs[0])],muc=0.7)
     hinge = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
     link = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
     grid.put(ground,[0,0],0,1,floating=True)

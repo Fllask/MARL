@@ -34,7 +34,10 @@ class stability_solver_discrete():
         self.Aeq = np.zeros((0,self.nr*6))
         self.beq = np.zeros(0)
         self.block = np.zeros((0),dtype=int)
-        self.rowid = np.zeros((0),dtype=int)
+        self.roweqid = np.zeros((0),dtype=int)
+        self.rowid = -np.ones((self.nr*6),dtype=int)
+        self.xid = -np.ones((self.nr*6),dtype=int)
+        
         
     def add_block(self,grid,block,bid):
         #get all the potential supports:
@@ -43,11 +46,6 @@ class stability_solver_discrete():
         ncorners = sup.shape[0]*2
         #get a list of all concerned blocks
         list_sup = np.unique(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3]])
-        
-        
-       
-        
-        
         
         nAeqcorner = np.zeros((3,ncorners*3))
         
@@ -101,9 +99,6 @@ class stability_solver_discrete():
                 nAeqcorner[2,idxj]=nAeqcorner[1,idxj]*posi[j,0,0]-nAeqcorner[0,idxj]*posi[j,0,1]
                 nAeqcorner[2,idxj+3]=nAeqcorner[1,idxj]*posi[j,1,0]-nAeqcorner[0,idxj]*posi[j,1,1]
         
-        
-        
-        
         #take care of Ffm for all of the lines
         nAeqcorner[:,2::3]=-nAeqcorner[:,1::3]
         
@@ -124,7 +119,7 @@ class stability_solver_discrete():
             #dont ask, dont tell, go fast
             idxs = np.nonzero(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3]]==supid)
             idxs = np.ravel(np.expand_dims(6*idxs[0],1)+np.expand_dims(np.arange(6),0))
-            for i,row in enumerate(np.nonzero(self.rowid==supid)[0]):
+            for i,row in enumerate(np.nonzero(self.roweqid==supid)[0]):
                 nAeqcol[row,idxs] = -nAeqcorner[i,idxs]
         
         
@@ -135,8 +130,8 @@ class stability_solver_discrete():
         
         
         #add an index of the row:
-        self.rowid = np.concatenate([self.rowid,bid*np.ones(3,dtype=int)])
-        
+        self.roweqid = np.concatenate([self.roweqid,bid*np.ones(3,dtype=int)])
+        self.xid = np.concatenate([self.xid,bid*np.ones(ncorners*3,dtype=int)])
         self.beq = np.concatenate([self.beq, [0,block.mass,block.mass*get_cm(block.parts)[0]]])
         
         
@@ -148,17 +143,35 @@ class stability_solver_discrete():
         Acorner[np.arange(ncorners),np.arange(ncorners)*3+2]=1
         self.A = np.block([[self.A, np.zeros((self.A.shape[0],3*ncorners))],
                            [np.zeros((ncorners,self.A.shape[1])),Acorner]])
-        
-        
+    
         self.b = np.concatenate([self.b, np.zeros(ncorners)])
-        
+        self.rowid = np.concatenate([self.rowid,bid*np.ones(ncorners)])
         self.c = np.concatenate([self.c,np.ones(ncorners*3)])
-                                 
+        
+    def remove_block(self,bid):
+        self.Aeq = np.delete(self.Aeq,np.nonzero(self.roweqid==bid),axis=0)
+        self.beq = np.delete(self.beq,np.nonzero(self.roweqid==bid))
+        
+        self.A = np.delete(self.A,np.nonzero(self.rowid==bid),axis=0)
+        self.b = np.delete(self.b,np.nonzero(self.rowid==bid))
+        
+        self.Aeq = np.delete(self.Aeq, np.nonzero(self.xid==bid),axis=1)
+        self.A = np.delete(self.A, np.nonzero(self.xid==bid),axis=1)
+        
+        self.c = np.delete(self.c,np.nonzero(self.xid==bid))
+        
+        #clean the indexes
+        
+        self.roweqid = np.delete(self.roweqid,self.roweqid == bid)
+        self.rowid = np.delete(self.rowid,self.rowid == bid)
+        self.xid = np.delete(self.xid,self.xid==bid)
+        
     def hold_block(self,bid,rid):
         row0 = np.nonzero(self.rowid==bid)[0][0]
         self.Aeq[row0:row0+3,rid:rid+6]= [[1,-1,0,0,0,0],
                                             [0,0,1,-1,0,0],
                                             [0,0,0,0,1,-1]]
+    
     def leave_block(self,rid):
         self.Aeq[:,rid:rid+6]=0
         
@@ -276,6 +289,7 @@ if __name__ == '__main__':
     
     grid.put(hinge,[7,0],0,8)
     ph_mod.add_block(grid,hinge, 8)
+    
     res8 = ph_mod.solve()
     print(f'Test Passed: {res8.success}\n total time: {time.perf_counter()-t10}s')
     

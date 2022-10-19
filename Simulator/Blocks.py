@@ -741,6 +741,9 @@ class Grid():
             return True
             # else:
             #     return False
+    def remove(self,bid):
+        self.occ[self.occ==bid]=0
+        self.neighbours[self.neighbours==bid]=0
 def same_side(sides1,sides2):
     #check if the 3rd and 4rth coord are compatible
     ret = np.zeros((sides1.shape[0],sides2.shape[0]),dtype=bool)
