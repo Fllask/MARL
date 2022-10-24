@@ -11,8 +11,25 @@ from Blocks import discret_block as Block, Grid
 from physics_scipy import stability_solver_discrete as ph
 import numpy as np
 import time
-def scenario1(maxs, n_block = 10,maxtry=100):
+class Simulator():
+    def __init__(self,maxs,nrobots=2):
+        self.grid = Grid(maxs)
+        self.ph_mod = ph(maxs,nrobots)
+        self.nbid=1
+    def place_ground(self,block,pos,rot):
+        self.grid.put(block,pos,rot,0,floating=True)
+    def place_block(self,block,pos,rot):
+        valid, dist, connection = self.grid.put(block, pos, rot, self.nbid)
+        if valid:
+            self.ph_mod.add_block(block,pos,rot,self.nbid)
+    def leave_block(self,bid):
+        pass
+    def hold_block
+            
+        
+def scenario1(maxs, n_block = 10,maxtry=100,draw=False):
     #try to fill the grid with hexagones
+    arts = []
     block_list = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])]
     
     
@@ -20,15 +37,24 @@ def scenario1(maxs, n_block = 10,maxtry=100):
     grid.put(block_list[0],[maxs[0]//2,maxs[1]//2],0,1,floating=True)
     bid = 2
     trys=0
+    if draw:
+        fig,ax = gr.draw_grid(maxs,h=7,color='none')
     while bid < n_block+1 and trys < maxtry:
         block = np.random.choice(block_list)
         pos = np.random.randint(maxs)
-        if grid.put(block,pos,0,bid):
+        valid,*_ = grid.put(block,pos,0,bid)
+        if valid:
+            if draw:
+                arts.append(gr.fill_grid(ax, grid,animated=True))
             bid +=1
             trys=0
         else:
             trys+=1
-    return grid,bid-1
+    if draw:
+        print("drawing")
+        ani = gr.animate(fig, arts,sperframe= 0.1)
+        return grid,bid-1,ani
+    return grid,bid-1,None
 def scenario2(maxs, n_block = 10,maxtry=100):
     #try to fill the grid with hexagones
     block_list = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]]),
@@ -36,7 +62,7 @@ def scenario2(maxs, n_block = 10,maxtry=100):
     
     
     grid = Grid(maxs)
-    grid.put(block_list[0],[maxs[0]//2,maxs[1]//2],0,1,floating=True)
+    grid.put(block_list[0],[maxs[0]//2,maxs[1]//2],0,0,floating=True)
     bid = 2
     trys=0
     
@@ -55,13 +81,67 @@ def scenario3(maxs,n_block,maxtry = 100,mode='triangle',draw=False,physon=True):
     
     block_list = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7),
                   Block([[0,0,0]],muc=0.7)]
-    ground = Block([[0,0,0],[maxs[0]-1,0,0]]+[[i,0,1] for i in range(0,maxs[0])],muc=0.7)
+    ground = Block([[0,2,0],[maxs[0]-1,2,0]]+[[i,2,1] for i in range(0,maxs[0])],muc=0.7)
     grid = Grid(maxs)
-    grid.put(ground, [0,0], 0, 1,floating=True)
-    
+    grid.put(ground, [0,0], 0, 0,floating=True)
+    arts = []
     phys = ph(maxs,n_robots = 0)
     trys = 0
-    bid = 2
+    bid = 1
+    if draw:
+        fig,ax = gr.draw_grid(maxs,h=10,color='none')
+        arts.append(gr.fill_grid(ax, grid,animated=True))
+    while bid < n_block and trys < maxtry:
+        if mode == 'triangle':
+            block = block_list[1]
+        elif mode == 'hex':
+            block = block_list[0]
+        else:
+            block = np.random.choice(block_list)
+        pos = np.random.randint(maxs)
+        rot = np.random.randint(6)
+        valid, *_ = grid.put(block,pos,rot,bid)
+        if valid:
+            if physon:    
+                phys.add_block(grid, block, bid)
+                res = phys.solve()
+                if res.status==0:
+                    if draw:
+                        arts.append(gr.fill_grid(ax, grid,animated=True))
+                    bid+=1
+                    trys=0
+                    
+                else:
+                    trys+=1
+                    grid.remove(bid)
+                    phys.remove_block(bid)
+                    
+            else:
+                if draw:
+                    arts.append(gr.fill_grid(ax, grid,animated=True))
+                bid+=1
+                trys=0
+                
+        else:
+            trys+=1
+    if draw:
+        print("drawing")
+        ani = gr.animate(fig, arts,sperframe= 0.1)
+        return grid,bid-1,ani
+    return grid,bid-1,None
+def scenario4(maxs,n_block,maxtry = 100,mode='triangle',draw=False,physon=False,scale=0.0):
+    #try to bias the postion of the blocks so that they try to connect
+    
+    block_list = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7),
+                  Block([[0,0,0]],muc=0.7)]
+    
+    grid = Grid(maxs)
+    grid.put(block_list[0], [10,maxs[1]//2], 0, 0,floating=True)
+    grid.put(block_list[0], [maxs[0]-11,maxs[1]//2], 0, 0,floating=True)
+    if physon:
+        phys = ph(maxs,n_robots = 0)
+    trys = 0
+    bid = 1
     while bid < n_block+1 and trys < maxtry:
         if mode == 'triangle':
             block = block_list[1]
@@ -71,7 +151,8 @@ def scenario3(maxs,n_block,maxtry = 100,mode='triangle',draw=False,physon=True):
             block = np.random.choice(block_list)
         pos = np.random.randint(maxs)
         rot = np.random.randint(6)
-        if grid.put(block,pos,rot,bid):
+        valid,dist,con = grid.put(block,pos,rot,bid)
+        if valid:
             if draw:
                 fig,ax = gr.draw_grid(maxs,h=30,label_points=True)
                 gr.fill_grid(ax,grid)
@@ -79,8 +160,12 @@ def scenario3(maxs,n_block,maxtry = 100,mode='triangle',draw=False,physon=True):
                 phys.add_block(grid, block, bid)
                 res = phys.solve()
                 if res.status==0:
-                    bid+=1
-                    trys=0
+                    remove = np.random.random(1)*2-1
+                    if remove > dist[0]:
+                        grid.remove_block(bid)
+                    else:
+                        bid+=1
+                        trys=0
                     
                 else:
                     trys+=1
@@ -92,22 +177,94 @@ def scenario3(maxs,n_block,maxtry = 100,mode='triangle',draw=False,physon=True):
                     
                     
             else:
-                bid+=1
-                trys=0
+                if con is not None:
+                    print("connected")
+                    break
+                remove = (np.random.random(1)*2-1)*scale
+                con_dist = np.argmax(dist)
+                if remove < dist[con_dist]:
+                    grid.remove(bid)
+                else:
+                    bid+=1
+                    trys=0
                 
         else:
             trys+=1
     return grid,bid-1
+
+def scenario5(maxs,n_block,maxtry = 100,mode='triangle',draw=False,scale=0.3):
+    #try to bias the postion of the blocks so that they try to connect, with 3 grounds
+    
+    block_list = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7),
+                  Block([[0,0,0]],muc=0.7)]
+    if draw:
+        fig,ax = gr.draw_grid(maxs,h=7,color='none')
+        arts = []
+    grid = Grid(maxs)
+    grid.put(block_list[0], [10,maxs[1]//4], 0, 0,floating=True)
+    grid.put(block_list[0], [maxs[0]-11,maxs[1]//4], 0, 0,floating=True)
+    grid.put(block_list[0], [maxs[0]//3+1,3*maxs[1]//4], 0, 0,floating=True)
+
+    trys = 0
+    bid = 1
+    regtoconnect = 2
+    while bid < n_block+1 and trys < maxtry:
+        if mode == 'triangle':
+            block = block_list[1]
+        elif mode == 'hex':
+            block = block_list[0]
+        else:
+            block = np.random.choice(block_list)
+        pos = np.random.randint(maxs)
+        rot = np.random.randint(6)
+        valid,dist,con = grid.put(block,pos,rot,bid)
+        if valid:
+            if con is not None:                    
+                grid.absorb_reg(con[1], con[0])
+                regtoconnect -=1
+                print("connected")
+                if regtoconnect==0:
+                    break
+                else:
+                    if draw:
+                        arts.append(gr.fill_grid(ax, grid,animated=True,use_con=True))
+                    bid+=1
+                    trys=0
+            else:
+                remove = (np.random.random(1)*2-1)*scale
+                dist[dist==1] = np.nan
+                con_dist = np.nanargmax(dist)
+                if remove < dist[con_dist]:
+                    grid.remove(bid)
+                else:
+                    if draw:
+                        arts.append(gr.fill_grid(ax, grid,animated=True,use_con=True))
+                    bid+=1
+                    trys=0
+            
+        else:
+            trys+=1
+    if draw:
+        print("drawing")
+        ani = gr.animate(fig, arts,sperframe= 0.1)
+        return grid,bid-1,ani
+    return grid,bid-1,None
+
 if __name__ == '__main__':
     print("Start test simulator")
-    maxs = [30,20]
+    maxs = [30,40]
     
-    fig,ax = gr.draw_grid(maxs,h=30,label_points=False,color='none')
+    
     time0 = time.perf_counter()
-    grid,bid = scenario3(maxs,n_block=300,maxtry=1000,mode='triangle',physon = False)
+    #grid,bid,ani = scenario1(maxs,n_block=200,maxtry=10000,draw=True)
+    
+    grid,bid,ani = scenario3(maxs,n_block=600,maxtry=10000,mode='triangle',draw=True)
     time1 = time.perf_counter()
     print(f"time needed to put {bid} blocks: {time1-time0} ")
-    gr.fill_grid(ax, grid)
+    if ani is not None:
+        gr.save_anim(ani,"test scenario")
+    fig,ax = gr.draw_grid(maxs,h=30,label_points=False,color='none')
+    gr.fill_grid(ax, grid,use_con=True)
     plt.show()
     print("End test simulator")
     

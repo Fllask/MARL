@@ -5,7 +5,7 @@ Created on Mon Sep 19 09:55:31 2022
 @author: valla
 """
 from scipy.optimize import linprog 
-from Blocks import discret_block as Block, Grid, switch_direction
+from Blocks import discret_block as Block, Grid, switch_direction,grid2real
 import numpy as np
 import time 
 
@@ -38,11 +38,12 @@ class stability_solver_discrete():
         self.rowid = -np.ones((self.nr*6),dtype=int)
         self.xid = -np.ones((self.nr*6),dtype=int)
         
+        # self.last_sol = np.zeros(0)
         
     def add_block(self,grid,block,bid):
         #get all the potential supports:
         pot_sup = switch_direction(block.neigh)
-        sup = pot_sup[np.nonzero(grid.neighbours[pot_sup[:,0],pot_sup[:,1],pot_sup[:,2],pot_sup[:,3]])]
+        sup = pot_sup[np.nonzero(grid.neighbours[pot_sup[:,0],pot_sup[:,1],pot_sup[:,2],pot_sup[:,3]]!=-1)]
         ncorners = sup.shape[0]*2
         #get a list of all concerned blocks
         list_sup = np.unique(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3]])
@@ -88,8 +89,7 @@ class stability_solver_discrete():
         pos0 = pos[sup0idx_s]
         pos1 = pos[sup1idx_s]
         pos2 = pos[sup2idx_s]
-        if bid ==8:
-            pass
+        
         for idxi, posi in zip([sup0idx_s[0],sup1idx_s[0],sup2idx_s[0]],[pos0,pos1,pos2]):
             numberp=len(idxi)
             if numberp==0:
@@ -113,7 +113,7 @@ class stability_solver_discrete():
         nAeqcol = np.zeros((self.Aeq.shape[0],ncorners*3))
         
         for supid in list_sup:
-            if supid == 1:
+            if supid == 0:
                 #index reserved to the ground, ignore
                 continue
             #dont ask, dont tell, go fast
@@ -178,20 +178,30 @@ class stability_solver_discrete():
     def bid2boolarr(self,bid,idx='row'):
         return np.nonzero(self.block==bid)
     def solve(self):
-        return linprog(self.c,self.A,self.b,self.Aeq,self.beq)
+        # if reuse:
+        #     if self.last_sol.shape[0]<=self.c.shape[0]:
+        #         x0 = np.concatenate([self.last_sol,np.zeros(self.c.shape[0]-self.last_sol.shape[0])])
+        #     else:
+        #         x0 = np.delete(self.last_sol,np.arange(self.last_sol.shape[0]-self.c.shape[0],self.last_sol.shape[0]))
+        # else:
+        #     x0=None
+        res = linprog(self.c,self.A,self.b,self.Aeq,self.beq)
+        # if res.status ==0:
+        #     self.last_sol = res.x
+        return res
     
 
 
-def side2Aeq(sides):
-    #given an array of sides, return an array of coefficients to get Fx and Fy from 
-    #Fs, Ffp and Ffm
-    coefs = np.zeros(sides.shape[0]*3,3)
-    sides0idxs = np.nonzero(sides[:,3]==0)
-    pos0 = np.tile(grid2real(sides[sides0idxs]),)
-    coefs[sides0idxs*3,:]= np.tile([0,1,-1,0,1,-1],sides0idxs.shape[0])
-    coefs[sides0idxs*3+1,:]=np.tile([1,0,0,1,0,0],sides0idxs.shape[0])
-    coefs[sides0idxs*3+2,:]=0
-    return coefs
+# def side2Aeq(sides):
+#     #given an array of sides, return an array of coefficients to get Fx and Fy from 
+#     #Fs, Ffp and Ffm
+#     coefs = np.zeros(sides.shape[0]*3,3)
+#     sides0idxs = np.nonzero(sides[:,3]==0)
+#     pos0 = np.tile(grid2real(sides[sides0idxs]),)
+#     coefs[sides0idxs*3,:]= np.tile([0,1,-1,0,1,-1],sides0idxs.shape[0])
+#     coefs[sides0idxs*3+1,:]=np.tile([1,0,0,1,0,0],sides0idxs.shape[0])
+#     coefs[sides0idxs*3+2,:]=0
+#     return coefs
     
 def side2corners(sides):
     #return the real coordinates of the two corners of the sides

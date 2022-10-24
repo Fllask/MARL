@@ -11,9 +11,14 @@ import numpy as np
 
 from Blocks import discret_block as Block
 from Blocks import Grid
+
+from matplotlib import animation
+from IPython.display import HTML
+
+
 s3 =np.sqrt(3)
 base = np.array([[1,0.5],[0,s3/2]])
-def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6):
+def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,linewidth=1):
     fig,ax = plt.subplots(1,1,figsize=(h,h*(maxs[0]+maxs[1]*0.5)/((maxs[1]-0.5)*s3)))
     xlim = [-0.5,maxs[0]+0.5*maxs[1]]
     ylim = [-s3/2,maxs[1]*s3/2]
@@ -23,18 +28,18 @@ def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6):
     #draw the horizontal lines
     y = np.arange(ylim[0],ylim[1],s3/2*steps)
     y = np.stack([y,y])
-    ax.plot(np.reshape(xlim,(2,1)),y,color=color)
+    ax.plot(np.reshape(xlim,(2,1)),y,color=color,linewidth=linewidth)
     #draw the 60 degrees lines
     y = np.arange(ylim[0]-(xlim[1])*s3,ylim[1]-(xlim[0])*s3,s3*steps)
     y = y-y[np.argmin(abs(y))]
     y = np.stack([y+xlim[0]*s3,y+xlim[1]*s3])    
     
-    ax.plot(np.reshape(xlim,(2,1)),y,color=color)
+    ax.plot(np.reshape(xlim,(2,1)),y,color=color,linewidth=linewidth)
     #draw the -60 degree lines
     y = np.arange(ylim[0]+(xlim[0])*s3,ylim[1]+(xlim[1])*s3,s3*steps)
     y = y-y[np.argmin(abs(y))]
     y = np.stack([y-xlim[0]*s3,y-xlim[1]*s3])    
-    ax.plot(np.reshape(xlim,(2,1)),y,color=color)
+    ax.plot(np.reshape(xlim,(2,1)),y,color=color,linewidth=linewidth)
     if label_points:
         for x0 in range(maxs[0]):
             for x1 in range(maxs[1]):
@@ -61,7 +66,7 @@ def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6):
 def rad(alpha):
     return alpha*180/np.pi
 
-def fill_triangle(ax,coord,**colorkw):
+def fill_triangle(ax,coord,animated=False,**colorkw):
     coord = np.array(coord)
     
     triangle = np.tile([[0,0],[0.5,np.sqrt(3)/2],[1,0]],(coord.shape[0],1,1))
@@ -69,8 +74,9 @@ def fill_triangle(ax,coord,**colorkw):
     triangle[down,:,1]=-triangle[down,:,1]
     xycoord = (base @ coord[:,:-1].T).T
     
-    art = [Polygon(xycoord[i]+triangle[i],**colorkw) for i in range(coord.shape[0])]
+    art = [Polygon(xycoord[i]+triangle[i],animated=animated,**colorkw) for i in range(coord.shape[0])]
     [ax.add_artist(a) for a in art]
+    return art
 def draw_side(ax,coord):
     if coord[3]==0:
         p1 = coord[:2]
@@ -89,21 +95,37 @@ def draw_side(ax,coord):
     p2xy = base @ p2
     ax.plot([p1xy[0],p2xy[0]],[p1xy[1],p2xy[1]],color=color,alpha=0.5,linewidth=10)
         
-def fill_grid(ax,grid,draw_neigh =False):
+def fill_grid(ax,grid,draw_neigh =False,use_con=False,animated=False,ground_color='darkslategrey'):
     ids = np.unique(grid.occ)
+    arts = []
     for i in ids:
-        if i == 0:
+        if i == -1:
             continue
+        if i ==0:
+            coords = np.array(np.where(grid.occ==i))
+            arts += fill_triangle(ax, coords.T,color=ground_color,animated=animated)
         else:
             coords = np.array(np.where(grid.occ==i))
-            fill_triangle(ax, coords.T,color=plt.cm.turbo(i/np.max(ids)))
+            if use_con:
+                if grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 0:
+                    cmap = plt.cm.summer
+                elif grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 1:
+                    cmap = plt.cm.winter
+                else:
+                    cmap = plt.cm.autumn
+                arts +=fill_triangle(ax, coords.T,color=cmap(i/np.max(ids)),animated=animated)
+            else:
+                arts +=fill_triangle(ax, coords.T,color=plt.cm.turbo(i/np.max(ids)),animated=animated)
     if draw_neigh:
         coords=np.nonzero(grid.neighbours)
         coords = np.array(coords)
         for i in range(coords.shape[1]):
             draw_side(ax,coords[:,i])
-            
-    
+    return arts
+def animate(fig,arts_list,sperframe= 0.1):
+    ani = animation.ArtistAnimation(fig, arts_list, interval=sperframe*1000, blit=True)
+    HTML(ani.to_jshtml())
+    return ani
 def draw_block(ax,block, pos,draw_neigh=False, **colorkw):
     block.move(pos)
     fill_triangle(ax, block.parts,**colorkw)
@@ -111,7 +133,14 @@ def draw_block(ax,block, pos,draw_neigh=False, **colorkw):
     if draw_neigh:
         for s in block.neigh:
             draw_side(ax,s)
-            
+def save_anim(ani,name='animation',ext = 'html'):
+    if ext == 'html':
+        file = open(f"{name}.html","w")
+        file.write(ani.to_jshtml())
+        file.close()
+    elif ext == 'gif':
+        writergif = animation.PillowWriter(fps=30) 
+        ani.save('test.gif', writer=writergif)
 
 if __name__ == "__main__":
     print("Start test")
@@ -119,20 +148,20 @@ if __name__ == "__main__":
     
     maxs = [9,6]
     grid = Grid(maxs)
-    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=True,h=30)
+    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=True,h=30,linewidth=0.3)
     t = Block([[0,0,1],[0,0,0]])
     ground = Block([[0,0,0],[2,0,0],[6,0,0],[8,0,0]]+[[i,0,1] for i in range(0,maxs[0])])
     #ground = Block([[0,0,0],[maxs[0]-1,0,0]]+[[i,0,1] for i in range(0,maxs[0])],muc=0.7)
     hinge = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
     link = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
-    grid.put(ground,[0,0],0,1,floating=True)
-    grid.put(hinge,[1,0],0,2)
-    grid.put(link,[0,2],0,3)
-    grid.put(hinge,[1,3],0,4)
-    grid.put(link,[1,5],5,5)
-    grid.put(hinge,[4,3],0,6)
-    grid.put(link,[5,3],5,7)
-    grid.put(hinge,[7,0],0,8)
+    # grid.put(ground,[0,0],0,1,floating=True)
+    # grid.put(hinge,[1,0],0,2)
+    # grid.put(link,[0,2],0,3)
+    # grid.put(hinge,[1,3],0,4)
+    # grid.put(link,[1,5],5,5)
+    # grid.put(hinge,[4,3],0,6)
+    # grid.put(link,[5,3],5,7)
+    # grid.put(hinge,[7,0],0,8)
     # grid.put(link,[4,5],0,2,floating=True)
     # grid.put(hinge, [5,6],0,3,floating=False)
     fill_grid(ax,grid,draw_neigh=False)
