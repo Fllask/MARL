@@ -4,14 +4,15 @@ Created on Mon Sep 19 09:55:31 2022
 
 @author: valla
 """
+import time 
+import numpy as np
 from scipy.optimize import linprog 
 from Blocks import discret_block as Block, Grid, switch_direction,grid2real
-import numpy as np
-import time 
+
+
 
 class stability_solver_discrete():
     def __init__(self,
-                 maxs,
                  Fx_robot = [-100,100],
                  Fy_robot = [-100,100],
                  M_robot = [-1000,1000],
@@ -43,7 +44,10 @@ class stability_solver_discrete():
     def add_block(self,grid,block,bid):
         #get all the potential supports:
         pot_sup = switch_direction(block.neigh)
-        sup = pot_sup[np.nonzero(grid.neighbours[pot_sup[:,0],pot_sup[:,1],pot_sup[:,2],pot_sup[:,3]]!=-1)]
+        sup = pot_sup[np.nonzero(grid.neighbours[pot_sup[:,0],
+                                                 pot_sup[:,1],
+                                                 pot_sup[:,2],
+                                                 pot_sup[:,3]]!=-1)]
         ncorners = sup.shape[0]*2
         #get a list of all concerned blocks
         list_sup = np.unique(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3]])
@@ -149,47 +153,57 @@ class stability_solver_discrete():
         self.c = np.concatenate([self.c,np.ones(ncorners*3)])
         
     def remove_block(self,bid):
+        #find all columns where Aeq is not zero
+        col2del = np.unique(np.nonzero(self.Aeq[self.roweqid==bid])[1])
+        #remove the ones attributed to the robot:
+        col2del = np.delete(col2del,np.nonzero(col2del<self.nr*6))
+        
         self.Aeq = np.delete(self.Aeq,np.nonzero(self.roweqid==bid),axis=0)
         self.beq = np.delete(self.beq,np.nonzero(self.roweqid==bid))
         
         self.A = np.delete(self.A,np.nonzero(self.rowid==bid),axis=0)
         self.b = np.delete(self.b,np.nonzero(self.rowid==bid))
         
-        self.Aeq = np.delete(self.Aeq, np.nonzero(self.xid==bid),axis=1)
-        self.A = np.delete(self.A, np.nonzero(self.xid==bid),axis=1)
+        self.Aeq = np.delete(self.Aeq, col2del,axis=1)
         
-        self.c = np.delete(self.c,np.nonzero(self.xid==bid))
+        self.A = np.delete(self.A, col2del,axis=1)
+        
+        self.c = np.delete(self.c,col2del)
         
         #clean the indexes
         
         self.roweqid = np.delete(self.roweqid,self.roweqid == bid)
         self.rowid = np.delete(self.rowid,self.rowid == bid)
-        self.xid = np.delete(self.xid,self.xid==bid)
+        self.xid = np.delete(self.xid,col2del)
         
     def hold_block(self,bid,rid):
-        row0 = np.nonzero(self.rowid==bid)[0][0]
+        row = np.nonzero(self.roweqid==bid)
+        if row[0].shape[0] > 0:
+            row0 = row[0][0]
+        else:
+            return False
         self.Aeq[row0:row0+3,rid:rid+6]= [[1,-1,0,0,0,0],
                                             [0,0,1,-1,0,0],
                                             [0,0,0,0,1,-1]]
-    
+        return True
     def leave_block(self,rid):
         self.Aeq[:,rid:rid+6]=0
         
-    def bid2boolarr(self,bid,idx='row'):
-        return np.nonzero(self.block==bid)
+    # def bid2boolarr(self,bid,idx='row'):
+    #     return np.nonzero(self.block==bid)
     def solve(self):
-        # if reuse:
-        #     if self.last_sol.shape[0]<=self.c.shape[0]:
-        #         x0 = np.concatenate([self.last_sol,np.zeros(self.c.shape[0]-self.last_sol.shape[0])])
-        #     else:
-        #         x0 = np.delete(self.last_sol,np.arange(self.last_sol.shape[0]-self.c.shape[0],self.last_sol.shape[0]))
-        # else:
-        #     x0=None
         res = linprog(self.c,self.A,self.b,self.Aeq,self.beq)
-        # if res.status ==0:
-        #     self.last_sol = res.x
         return res
-    
+    def reset(self):
+        self.A = np.diag(np.ones(self.nr*6))
+        self.b = self.b[:self.nr*6]
+        self.c = np.ones(self.nr*6)
+        self.Aeq = np.zeros((0,self.nr*6))
+        self.beq = np.zeros(0)
+        self.block = np.zeros((0),dtype=int)
+        self.roweqid = np.zeros((0),dtype=int)
+        self.rowid = -np.ones((self.nr*6),dtype=int)
+        self.xid = -np.ones((self.nr*6),dtype=int)
 
 
 # def side2Aeq(sides):
@@ -218,12 +232,7 @@ def side2corners(sides):
     corners[upsides[:,3]==1,1,:] = corners[upsides[:,3]==1,1,:]+[0.5,np.sqrt(3)/2]
     corners[upsides[:,3]==2,0,:] = corners[upsides[:,3]==2,0,:]+[0.5,np.sqrt(3)/2]
     return corners
-def grid2real(parts):
-    #return the coordinate of the leftmost point of the triangle
-    r_parts = np.zeros((parts.shape[0],2))
-    r_parts[:,0] = parts[:,0]+parts[:,1]*0.5
-    r_parts[:,1] = parts[:,1]*np.sqrt(3)/2
-    return r_parts
+
 def get_cm(parts):
     # parts = parts - parts[0,:]
     c_parts = np.zeros((parts.shape[0],2))
@@ -235,7 +244,7 @@ if __name__ == '__main__':
     print("Start physics test")
     maxs = [9,6]
     t00 = time.perf_counter()
-    ph_mod = stability_solver_discrete(maxs,n_robots=0)
+    ph_mod = stability_solver_discrete(n_robots=0)
     grid = Grid(maxs)
     t = Block([[0,0,0]])
     tr = Block([[1,1,1],[1,1,0],[1,2,1]],muc=0.7)

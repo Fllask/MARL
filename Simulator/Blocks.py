@@ -710,38 +710,39 @@ class Hang(Interface):
         pass
     def complete(self,blocks:list):
         pass
+
 class Grid():
     def __init__(self,maxs):
         self.occ = -np.ones((maxs[0]+1,maxs[1]+1,2),dtype=int)
         self.neighbours = -np.ones((maxs[0]+1,maxs[1]+1,2,3),dtype=int)
         self.connection = -np.ones((maxs[0]+1,maxs[1]+1,2),dtype=int)
-        self.closest_point = np.zeros((0,0,2))
+        self.hold = -np.ones((maxs[0]+1,maxs[1]+1,2),dtype = int)
         self.min_dist = np.zeros((0,0))
         self.nreg = 0
-    def put(self,block,pos0,rot,bid,floating=False):
-        #if bid < 0: the block is held by robot -bid
+    def put(self,block,pos0,rot,bid,floating=False,holder_rid=None):
         block.turn(rot)
         block.move(pos0)
         #test if the block is in the grid
         if (np.min(block.parts)<0 or
             np.max(block.parts[:,0])>=self.occ.shape[0]-1 or
             np.max(block.parts[:,1])>=self.occ.shape[1]-1):
-            return False,None,None
+            return False,None
         #test if the is no overlap
         if np.any(self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]!=-1):
-            return False,None,None
+            return False,None
         else:
             #check if there is a connection (ask for at least 1 points)
             #if floating or np.any(same_side(block.neigh, np.array(np.where(self.neighbours)).T)):
             if not floating:
                 candidates = switch_direction(block.neigh)
                 if np.all(self.neighbours[candidates[:,0],candidates[:,1],candidates[:,2],candidates[:,3]]==-1):
-                    return False,None,None
+                    return False,None
             #if floating or np.any(switch_direction(block.neigh)np.array(np.where(self.neighbours)).T)):
                 #addd the block
             self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=bid
             self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3]]=bid
-            
+            if holder_rid is not None:
+                self.hold[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=holder_rid
             
             #take care of the connectivity of the different regions
             if floating:
@@ -756,56 +757,107 @@ class Grid():
                     self.min_dist[regi,self.nreg]=min_dist
                     self.min_dist[self.nreg,regi]=min_dist
                 self.nreg = self.nreg+1
-                return True,None,None
+                
+                return True,None
             else:
+                
                 #add the block to the connected region
                 connect_region = np.unique(self.connection[candidates[:,0],candidates[:,1],candidates[:,2]])
                 connect_region = np.delete(connect_region,connect_region==-1)
                 
-                targets = np.delete(np.arange(self.nreg),connect_region)
-                ndist = np.ones(self.nreg)
+                targets = np.delete(np.arange(self.nreg),connect_region[0])
+                ndist = np.zeros(self.nreg)
+                #distb = np.zeros(targets.shape[0])
+                closer = -1
                 
                 for i in targets:
                     distb = closest_point(block.parts,np.array(np.nonzero(self.connection==i)).T)
                     
-                    ndist[i] = (distb-self.min_dist[connect_region[0],i])/(distb+self.min_dist[connect_region[0],i]+1e-5)
                     
-                    if distb<self.min_dist[connect_region[0],i]:
+                    #ndist[i] = (distb-self.min_dist[connect_region[0],i])/(distb+self.min_dist[connect_region[0],i]+1e-5)
+                   
+                    if distb<self.min_dist[connect_region[0],i]+1e-5:
+                        closer =1
                         self.min_dist[connect_region[0],i]=distb
                         self.min_dist[i,connect_region[0]]=distb
-              
-                
+                        self.shortest_path(i,connect_region[0])
+                        self.shortest_path(connect_region[0],i)
+                    elif distb<self.min_dist[connect_region[0],i]-1e-5:
+                        closer = 0
                 self.connection[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=connect_region[0]
                 if len(connect_region)>1:
                     #two region are connected
-                    return True, ndist, connect_region
-                return True,ndist,None
+                    #return True, ndist, connect_region
+                    return True, closer
+                #return True,ndist,
+                return True,closer
             # else:
             #     return False
+            
     def remove(self,bid):
         assert bid > 0
-        idcon = np.unique(self.connection[self.occ==bid])[0]
+        idcon = self.connection[self.occ==bid]
+        if len(idcon)==0:
+            return False
+        else:
+            idcon = idcon[0]
         self.connection[self.occ==bid]=-1
         for i in np.delete(np.arange(self.nreg),idcon):
-            min_dist= closest_point(	np.array(np.nonzero(self.connection==idcon)).T,np.array(np.nonzero(self.connection==i)).T)
+            
+            min_dist= closest_point(np.array(np.nonzero(self.connection==idcon)).T,np.array(np.nonzero(self.connection==i)).T)
             self.min_dist[i,idcon]=min_dist
             self.min_dist[idcon,i]=min_dist
+        for i in np.delete(np.arange(self.nreg),idcon):
+            self.shortest_path(i,idcon)
+            self.shortest_path(idcon,i)
         self.occ[self.occ==bid]=-1
         self.neighbours[self.neighbours==bid]=-1
+        return True
     def absorb_reg(self,old_cid,new_cid):
         self.connection[self.connection==old_cid]=new_cid
         self.min_dist[old_cid,new_cid]=0
         self.min_dist[new_cid,old_cid]=0
+    def reset(self):
+        self.occ[:,:,:] = -1
+        self.neighbours[:,:,:,:] = -1
+        self.connection[:,:,:] = -1
+        self.hold[:,:,:] = -1
+        self.min_dist = np.zeros((0,0))
+        self.nreg = 0
+    def shortest_path(self,source,sink):
+        twosteps = self.min_dist[source,sink]+self.min_dist[sink,:]
+        shortest = twosteps < self.min_dist[source,:]
+        if np.any(shortest):
+            pass
+        self.min_dist[source,shortest]=twosteps[shortest]
+        self.min_dist[shortest,source]=twosteps[shortest]
+    
 def closest_point(parts1,parts2):
     if parts1.shape[0]==0 or parts2.shape[0]==0:
         return np.nan
-    p1 = grid2real(parts1)
-    p2 = grid2real(parts2)
-    dists = np.square(p1[:,0][None,...]-p2[:,0][...,None])+np.square(p1[:,1][None,...]-p2[:,1][...,None])
+    p1 = side2corner(outer_sides(parts1))
+    p1=np.reshape(p1,(-1,2))
+    p2 = side2corner(outer_sides(parts2))
+    p2=np.reshape(p2,(-1,2))
+    dists = np.sqrt(np.square(p1[:,0][None,...]-p2[:,0][...,None])+np.square(p1[:,1][None,...]-p2[:,1][...,None]))
     closestp1, closestp2 = np.unravel_index(np.argmin(dists), dists.shape)
     mindist = dists[closestp1, closestp2]
     return mindist
-
+def side2corner(sides):
+    #return the real coordinates of the two corners of the sides
+    #note that p1(side)==p1(switch direction(side))
+    
+    #switch the direction of all down triangles:
+    upsides = np.copy(sides)
+    upsides[sides[:,2]==1,:]=switch_direction(sides[sides[:,2]==1,:])
+    #first put each corner at the leftest point
+    corners = grid2real(upsides)
+    corners = np.stack([corners,corners],axis=1)
+    corners[upsides[:,3]==0,1,:] = corners[upsides[:,3]==0,1,:]+[1,0]
+    corners[upsides[:,3]==1,0,:] = corners[upsides[:,3]==1,0,:]+[1,0]
+    corners[upsides[:,3]==1,1,:] = corners[upsides[:,3]==1,1,:]+[0.5,np.sqrt(3)/2]
+    corners[upsides[:,3]==2,0,:] = corners[upsides[:,3]==2,0,:]+[0.5,np.sqrt(3)/2]
+    return corners
 def grid2real(parts):
     #return the coordinate of the leftmost point of the triangle
     r_parts = np.zeros((parts.shape[0],2))
@@ -846,18 +898,15 @@ def switch_direction(sides):
     return ret
 
 class discret_block():
-    def __init__(self,parts,density=1,muc=0):
+    def __init__(self,parts,density=1,muc=0,rot=0):
         self.parts = np.array(parts)
-        self.neigh = np.zeros((3*self.parts.shape[0],4),dtype=int)
-        self.neigh[:,:3] =np.tile(self.parts,(3,1))
-        self.neigh[:self.parts.shape[0],3] = 0
-        self.neigh[self.parts.shape[0]:2*self.parts.shape[0],3] = 1
-        self.neigh[2*self.parts.shape[0]:,3] = 2
-        same = same_side(self.neigh,self.neigh)
-        self.neigh = self.neigh[~np.any(same,axis=0)]
+        self.neigh = outer_sides(self.parts)
         self.mass = density*self.parts.shape[0]
         self.muc = muc
-    def turn(self,time,center=None):
+        self.rot = 0
+    def turn(self,time_abs,center=None):
+        time = (time_abs-self.rot)%6
+        self.rot = time_abs
         if center is None:
             center = self.parts[0,:2]
         if time == 0:
@@ -912,6 +961,14 @@ class discret_block():
         self.neigh[:,:2]=self.neigh[:,:2]+delta
         #use real coordonates
         #self.cm = self.cm + delta @ 
+def outer_sides(parts):
+    neigh = np.zeros((3*parts.shape[0],4),dtype=int)
+    neigh[:,:3] =np.tile(parts,(3,1))
+    neigh[:parts.shape[0],3] = 0
+    neigh[parts.shape[0]:2*parts.shape[0],3] = 1
+    neigh[2*parts.shape[0]:,3] = 2
+    same = same_side(neigh,neigh)
+    return neigh[~np.any(same,axis=0)]
 def norm(x):
     return np.sqrt(np.sum(np.square(x)))
 def cross(x,y):
