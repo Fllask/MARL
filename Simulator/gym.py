@@ -13,7 +13,7 @@ from Blocks import discret_block as Block
 from Agents import NaiveRandom,reward_link2,WolpertingerLearner,QTLearner
 from discrete_simulator import DiscreteSimulator as Sim,Transition as Trans
 import discrete_graphics as gr
-hexagon = Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7)
+hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
 triangle = Block([[0,0,0]],muc=0.7)
 link = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7)
 hextarget = Block([[1,0,1],[0,0,0],[2,0,0]])
@@ -21,9 +21,9 @@ class ReplayDiscreteGym():
     def __init__(self,
                  maxs = [9,6],
                  block_type = [hexagon,link],
-                 targets = [hextarget]*2,
+                 targets = [triangle]*2,
                  targets_loc = [[1,0],[7,0]],
-                 targets_rot = [0,0],
+                 targets_rot = [1,1],
                  n_robots=2,
                  ranges = None,
                  agent_type = NaiveRandom,
@@ -42,7 +42,7 @@ class ReplayDiscreteGym():
     def episode_egoist(self,
                        max_steps = 1000,
                        draw=False,
-                       buffer=np.array([]),
+                       buffer=np.zeros((2,0)),
                        buffer_count=0,
                        batch_size=32):
         success = False
@@ -67,19 +67,21 @@ class ReplayDiscreteGym():
                     self.sim.draw_act(idr,action,blocktype,**action_args)
                     if valid:
                         self.sim.add_frame()
-                if np.all(self.sim.grid.min_dist < 1e-5) and np.all(self.sim.grid.hold==-1):
-                    success = True
+                if valid:
+                    if np.all(self.sim.grid.min_dist < 1e-5) and np.all(self.sim.grid.hold==-1):
+                        success = True
+                    
                 reward =self.rewardf(action, valid, closer, success)
                 
                 rewards_ar[idr,step]=reward
-                buffer[buffer_count%buffer.shape[0]]=Trans(prev_state,
-                                                           action_enc,
-                                                           reward,
-                                                           copy.deepcopy(self.sim.grid))
-                buffer_count +=1
-                self.agents[idr].update_policy(buffer,buffer_count,batch_size)
+                buffer[idr,buffer_count%buffer.shape[1]]=Trans(prev_state,
+                                                               action_enc,
+                                                               reward,
+                                                               copy.deepcopy(self.sim.grid))
+                self.agents[idr].update_policy(buffer[idr,:],buffer_count,batch_size)
                 if success:
                     break
+            buffer_count +=1
             if success:
                 break
         
@@ -96,13 +98,13 @@ class ReplayDiscreteGym():
                 draw_freq=100,
                 max_steps=100,
                 save_freq = 5,
-                l_buffer = 500,
+                l_buffer = 1000,
                 n_mini_batches = 20,
                 log_dir=None):
         if log_dir is None:
             log_dir = os.path.join('log','log'+str(np.random.randint(10000000)))
             os.mkdir(log_dir)
-        buffer = np.empty(l_buffer,dtype = object)
+        buffer = np.empty((self.n_robots,l_buffer),dtype = object)
         buffer_count=0
         print("Training started")
         for episode in range(n_episodes):
@@ -121,7 +123,48 @@ class ReplayDiscreteGym():
                 gr.save_anim(anim,os.path.join(log_dir, f"episode {episode}"),ext='gif')
                 gr.save_anim(anim,os.path.join(log_dir, f"episode {episode}"),ext='html')
         return anim
-    
+    def test1(self,
+             draw=True):
+        success = False
+        self.sim =copy.deepcopy(self.setup)
+        if draw:
+            self.sim.setup_anim()
+            self.sim.add_frame()
+        
+        prev_state = copy.deepcopy(self.sim.grid)
+        
+        action = 'Ph'
+        action_args = {'pos':[4,0],'ori':0,'blocktypeid':1}
+        valid,closer,blocktype = self.agents[0].Act(self.sim,action,**action_args)
+        if draw:
+            self.sim.draw_act(0,action,blocktype,**action_args)
+            if valid:
+                self.sim.add_frame()
+                
+        action = 'Pl'
+        action_args = {'pos':[3,0],'ori':0,'blocktypeid':0}
+        valid,closer,blocktype = self.agents[1].Act(self.sim,action,**action_args)
+        if draw:
+            self.sim.draw_act(1,action,blocktype,**action_args)
+            if valid:
+                self.sim.add_frame()
+        
+        action = 'L'
+        action_args = {}
+        valid,closer,blocktype = self.agents[0].Act(self.sim,action,**action_args)
+        if draw:
+            self.sim.draw_act(0,action,blocktype,**action_args)
+            if valid:
+                self.sim.add_frame()
+        if valid:
+            if np.all(self.sim.grid.min_dist < 1e-5) and np.all(self.sim.grid.hold==-1):
+                print("success")
+        if draw:
+            anim = self.sim.animate()
+            gr.save_anim(anim,"test_agent",ext='gif')
+        else:
+            anim = None
+        return anim
 class DiscretGym():
     def __init__(self,
                  maxs = [9,6],
@@ -199,7 +242,8 @@ if __name__ == '__main__':
     print("Start test gym")
     gym = ReplayDiscreteGym(agent_type=QTLearner)
     t0 = time.perf_counter()
-    anim = gym.training(n_episodes = 1000,max_steps = 100, draw_freq = 100,pfreq =1)
+    anim = gym.training(n_episodes = 5000,max_steps = 100, draw_freq = 100,pfreq =1)
+    #anim = gym.test1()
     t1 = time.perf_counter()
-    print(f"time for 2000 steps: {t1-t0}s")
+    print(f"time spent: {t1-t0}s")
     print("\nEnd test gym")

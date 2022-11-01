@@ -50,7 +50,7 @@ class WolpertingerOpt():
             pass
         protoaction = self.act_net.forward(states)
         with torch.no_grad():
-            v = self.QT(states,protoaction).to(self.act_net.device)
+            v = self.QT(states,torch.unsqueeze(protoaction,1)).to(self.act_net.device)
         sum_v = torch.sum(v)
         self.optimizerpol.zero_grad()
         sum_v.backward()
@@ -175,18 +175,22 @@ class StateEncoder(nn.Module):
                  max_blocks,
                  n_robots,
                  n_regions,
-                 dim_b=4,
-                 dim_r=2,
-                 dim_c=2,
+                 # dim_b=4,
+                 # dim_r=2,
+                 # dim_c=2,
                  n_channels = 128,
                  n_internal_layer = 0,
                  device='cpu'):
         super().__init__()
-        self.occ_emb = nn.Embedding(max_blocks+1,dim_b,device=device)
-        self.hold_emb = nn.Embedding(n_robots+1, dim_r,device=device)
-        self.con_emb = nn.Embedding(n_regions+1,dim_c,device=device)
-        self.convinup = nn.Conv2d(dim_b+dim_r+dim_c, n_channels//2, 3,stride=1,device=device)
-        self.convindown = nn.Conv2d(dim_b+dim_r+dim_c, n_channels//2, 3,stride=1,device=device)
+        # self.occ_emb = nn.Embedding(max_blocks+1,dim_b,device=device)
+        # self.hold_emb = nn.Embedding(n_robots+1, dim_r,device=device)
+        # self.con_emb = nn.Embedding(n_regions+1,dim_c,device=device)
+        self.mbl=max_blocks
+        self.nrob = n_robots
+        self.nreg = n_regions
+        #self.convinup = nn.Conv2d(3, n_channels//2, 3,stride=1,device=device)
+        #self.convindown = nn.Conv2d(3, n_channels//2, 3,stride=1,device=device)
+        self.convin = nn.Conv2d(6,n_channels,3,stride=1,device=device)
         self.convinternal = [nn.Conv2d(n_channels,n_channels,3,stride=2,device=device) for i in range(n_internal_layer)]
         self.device=device
         dimx = maxs_grid[0]-1
@@ -197,15 +201,18 @@ class StateEncoder(nn.Module):
         self.out_dims = [n_channels,dimx,dimy]
     def forward(self,grids,inference = False):
         with torch.inference_mode(inference):
-            occ = self.occ_emb(torch.tensor(np.array([grid.occ for grid in grids]),device=self.device)+1)
-            hold = self.hold_emb(torch.tensor(np.array([grid.hold for grid in grids]),device=self.device)+1)
-            con = self.con_emb(torch.tensor(np.array([grid.connection for grid in grids]),device=self.device)+1)
-            
-            inputs = torch.cat([occ,hold,con],4)
-            inputs= inputs.permute(0,4,1,2,3)
-            rep = torch.cat([F.relu(self.convinup(inputs[...,0])),
-                          F.relu(self.convindown(inputs[...,1]))],1)
-            
+            # occ = self.occ_emb(torch.tensor(np.array([grid.occ for grid in grids]),device=self.device)+1)
+            # hold = self.hold_emb(torch.tensor(np.array([grid.hold for grid in grids]),device=self.device)+1)
+            # con = self.con_emb(torch.tensor(np.array([grid.connection for grid in grids]),device=self.device)+1)
+            occ = torch.tensor(np.array([grid.occ for grid in grids]),device=self.device)/self.mbl
+            hold = torch.tensor(np.array([grid.hold for grid in grids]),device=self.device)/self.nrob
+            con = torch.tensor(np.array([grid.connection for grid in grids]),device=self.device)/self.nreg
+            inputs = torch.cat([occ,hold,con],3)
+            inputs= inputs.permute(0,3,1,2)
+            #inputs= inputs.permute(0,4,1,2,3)
+            # rep = torch.cat([F.relu(self.convinup(inputs[...,0])),
+            #                  F.relu(self.convindown(inputs[...,1]))],1)
+            rep = F.relu(self.convin(inputs))
             for conv in self.convinternal:
                 rep = F.relu(conv(rep))
             return rep
@@ -235,23 +242,29 @@ class WolpertingerQTable(nn.Module):
         self.out = nn.Linear(n_neurons,1,device=device)
         self.loss = nn.MSELoss(reduction="sum")
         self.device=device
-    def forward(self,grids,actions_vec,inference = False,noise_amp=0):
+    def forward(self,grids,actions_vec,inference = False,explore=False):
         with torch.inference_mode(inference):
             
             if not isinstance(actions_vec,torch.Tensor):
                 actions_vec = torch.tensor(actions_vec,dtype=torch.float32,device=self.device)
             else:
                 actions_vec = actions_vec.to(self.device)
-            if len(grids)==1:
-                grids = actions_vec.shape[0]*grids
+            
+            shape = actions_vec.shape[:-1]
+            
+            
+            actions_vec = torch.flatten(actions_vec,0,len(shape)-1)
             
             reps = self.state_encoder(grids,inference=inference)
+            reps = torch.flatten(reps,1)
+            reps_aug = torch.repeat_interleave(reps, shape[1], dim=0)
             repa = F.relu(self.ain(actions_vec))
-            rep = torch.cat([torch.flatten(reps,1),repa],1)
+            rep = torch.cat([reps_aug,repa],1)
             for layer in self.FC:
                 rep = F.relu(layer(rep))
             
-            val_est = self.out(rep)
-            val_est += torch.normal(mean=torch.zeros_like(val_est),std = noise_amp*torch.ones_like(val_est))
+            val_est = torch.reshape(self.out(rep),shape)
+            if explore:
+                val_est = torch.softmax(val_est,dim=1)
             return val_est
             

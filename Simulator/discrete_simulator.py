@@ -86,7 +86,9 @@ class DiscreteSimulator():
         state = gr.fill_grid(self.ax, self.grid,animated=True)
         self.frames.append(state+gr.draw_action(self.ax,rid,action,blocktype,animated=True,**action_params))
     def animate(self):
-        return gr.animate(self.fig, self.frames)
+        anim = gr.animate(self.fig, self.frames)
+        plt.close(self.fig)
+        return anim
     def reset(self):
         '''remove all blocks from the sim'''
         self.grid.reset()

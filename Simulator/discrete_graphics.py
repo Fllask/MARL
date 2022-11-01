@@ -19,7 +19,7 @@ from IPython.display import HTML
 s3 =np.sqrt(3)
 base = np.array([[1,0.5],[0,s3/2]])
 def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,linewidth=1):
-    fig,ax = plt.subplots(1,1,figsize=(h,h*(maxs[0]+maxs[1]*0.5)/((maxs[1]-0.5)*s3)))
+    fig,ax = plt.subplots(1,1,figsize=(h*(maxs[0]+maxs[1]*0.5)/((maxs[1]-0.5)*s3),h))
     xlim = [-0.5,maxs[0]+0.5*maxs[1]]
     ylim = [-s3/2,maxs[1]*s3/2]
     ax.set_aspect('equal')
@@ -46,11 +46,11 @@ def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,linewidt
                 ax.text(x0+x1/2+0.5,x1*s3/2+0.2,f"({x0},{x1},0)",
                         va='center',
                         ha='center',
-                        fontsize=h/2)
+                        fontsize=h)
                 ax.text(x0+x1/2+0.5,x1*s3/2-0.2,f"({x0},{x1},1)",
                         va='center',
                         ha='center',
-                        fontsize=h/2)
+                        fontsize=h)
     ax.axis('off')
     # ax.set_yticklabels(np.arange(-xlim[0],np.floor((ylim[1]-ylim[0])/np.sqrt(3))-xlim[0]+1))
     return fig,ax
@@ -225,7 +225,7 @@ if __name__ == "__main__":
     
     maxs = [9,6]
     grid = Grid(maxs)
-    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=True,h=30,linewidth=0.3)
+    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=True,h=10,linewidth=0.3)
     t = Block([[0,0,1],[0,0,0]])
     ground = Block([[0,0,0],[2,0,0],[6,0,0],[8,0,0]]+[[i,0,1] for i in range(0,maxs[0])])
     #ground = Block([[0,0,0],[maxs[0]-1,0,0]]+[[i,0,1] for i in range(0,maxs[0])],muc=0.7)

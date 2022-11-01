@@ -29,19 +29,21 @@ class Agent(metaclass=abc.ABCMeta):
                 stable = simulator.check()
                 if not stable:
                     #the robot cannot move from there
-                    valid = False
                     simulator.hold(self.rid,oldbid)
-            else:
-                valid,closer = simulator.put(blocktype,pos,ori)
+                    return False,None,blocktype
                 
-                if valid:
-                    if action == 'Ph':
-                        simulator.hold(self.rid,simulator.nbid-1)
-                    if action == 'Pl':
-                        stable = simulator.check()
-                        if not stable:
-                            simulator.remove(simulator.nbid-1)
-                            valid = False
+            valid,closer = simulator.put(blocktype,pos,ori)
+            
+            if valid:
+                if action == 'Ph':
+                    simulator.hold(self.rid,simulator.nbid-1)
+                if action == 'Pl':
+                    stable = simulator.check()
+                    if not stable:
+                        simulator.remove(simulator.nbid-1)
+                        valid = False
+            if not valid:
+                simulator.hold(self.rid,oldbid)
                             
         elif action == 'H':
             oldbid = simulator.leave(self.rid)
@@ -54,6 +56,7 @@ class Agent(metaclass=abc.ABCMeta):
                 else:
                     if not simulator.hold(self.rid,bid):
                         simulator.hold(self.rid,oldbid)
+                        valid=False
         elif action == 'R':
             oldbid = simulator.leave(self.rid)
             if simulator.remove(bid):
@@ -73,7 +76,7 @@ class Agent(metaclass=abc.ABCMeta):
                 if not stable:
                     simulator.hold(self.rid,oldbid)
             else:
-                valid = True
+                valid = False
         else:
             assert False,'Unknown action'
         return valid,closer,blocktype
@@ -131,7 +134,7 @@ class QTLearner(Agent):
         self.gamma = 1-discount_f
         
     def update_policy(self,buffer,buffer_count,batch_size,steps=1):
-        buffer_count = np.clip(buffer_count,0,buffer.shape[0])
+        buffer_count = np.clip(buffer_count+1,0,buffer.shape[0])
         batch_size = np.clip(batch_size,0,buffer_count)
         batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
         #compute the state value using the target Q table
@@ -176,7 +179,7 @@ class WolpertingerLearner(Agent):
                  selected_actions = None,
                  discount_f = 0.1,
                  tau=0.1,
-                 device='cuda'
+                 device='cpu'
                  ):
         super().__init__(rid,block_choices)
         self.pr = placement_range
@@ -205,27 +208,32 @@ class WolpertingerLearner(Agent):
             self.selected_actions = selected_actions
         self.gamma = 1-discount_f
         self.tau = tau
-    def update_policy(self,buffer,buffer_count,batch_size,conv_tol = 1e-1,pol_steps=1):
-        buffer_count = np.clip(buffer_count,0,buffer.shape[0])
+    def update_policy(self,buffer,buffer_count,batch_size,conv_tol = 1e-1,pol_steps=3):
+        buffer_count = np.clip(buffer_count+1,0,buffer.shape[0])
         batch_size = np.clip(batch_size,0,buffer_count)
         batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
         #compute the state value using the target Q table
         states = [trans.state for trans in batch]
-        actions = np.concatenate([trans.a for trans in batch],axis=0)
+        actions = np.concatenate([[trans.a[1]] for trans in batch],axis=0)
         rewards = np.array([[trans.r] for trans in batch])
         nstates = [trans.new_state for trans in batch]
         
-        _,_,_,nactions = self.choose_action(nstates,target=True)
+        _,_,_,nactions = self.choose_action(nstates,target=True,explore=False)
        
         loss=1
-        #while loss > conv_tol:
-        for s in range(pol_steps):
-            loss = self.optimizer.optimize_QT(states,actions,rewards,nstates,nactions,self.gamma)
+        while loss > conv_tol:
+        #for s in range(pol_steps):
+            loss = self.optimizer.optimize_QT(states,
+                                              actions,
+                                              rewards,
+                                              nstates,
+                                              np.expand_dims(nactions,1),
+                                              self.gamma)
         for s in range(pol_steps):
             self.optimizer.optimize_pol(states)
         
         self.optimizer.update_target(self.tau)
-    def choose_action(self,state,target = False,grad=False,explore_amp=0):
+    def choose_action(self,state,target = False,grad=False,explore=True):
         if target:
             pol = self.target_protopol
             QT = self.target_QT
@@ -238,17 +246,21 @@ class WolpertingerLearner(Agent):
         
         if proto_action[0,0] != proto_action[0,0]:
             pass
-        actions = self.knn.kneighbors(proto_action.detach().cpu().numpy(),self.selected_actions,return_distance=False)
+        closest_actions = self.knn.kneighbors(proto_action.detach().cpu().numpy(),self.selected_actions,return_distance=False)
        
-        values = QT(state*actions.shape[1],self.action_list[actions.flatten('F'),:],inference = True,noise_amp=explore_amp)
-        bestactions_id =np.argmax(values.cpu().detach().numpy().reshape(-1,self.selected_actions,order='F'),axis=1)
-        best_action = self.action_list[actions[np.arange(actions.shape[0]),bestactions_id].flatten()]
-        if best_action.shape[0]==1:
-            
-            action,action_params = vec2act(best_action,self.n_typeblock,self.grid_size,self.max_blocks)
-            return action,action_params,proto_action,best_action
+        values = QT(state,self.action_list[closest_actions,:],inference = True,explore=explore).cpu().detach().numpy()
+        if explore:
+            cactionid = np.zeros(values.shape[0],dtype=int)
+            for i,p in enumerate(values):
+                cactionid[i] = np.random.choice(closest_actions.shape[1],p=p)
         else:
-            return None,None,proto_action,best_action
+            cactionid = np.argmax(values,axis=1)
+        action = self.action_list[closest_actions[np.arange(closest_actions.shape[0]),cactionid].flatten()]
+        if action.shape[0]==1:
+            action_name,action_params = vec2act(action,self.n_typeblock,self.grid_size,self.max_blocks)
+            return action_name,action_params,proto_action,action
+        else:
+            return None,None,proto_action,action
 
 def vec2act(action_vec,nblocktypes,gridsize,max_block):
     action_vec = np.reshape(action_vec,(5,5))
@@ -310,7 +322,7 @@ def generate_actions(ntype_blocks,grid_size,max_blocks):
     actions[-1,4,:]=1
     return np.reshape(actions,(-1,25))
 
-def reward_link2(action,valid,dist,terminal):
+def reward_link2(action,valid,closer,terminal):
     #reward specific to the case where the robots need to link two points
 
     #add a penalty for holding a block
@@ -322,20 +334,21 @@ def reward_link2(action,valid,dist,terminal):
     #add the terminal reward
     terminal_reward = 100
     #add a cost for each block
-    block_cost = -10
+    block_cost = -1
     #add a cost for the blocks going away from the target, 
     #or a reward if the block is going toward the target
     dist_cost = 2
 
     reward = 0
+    if not valid:
+        return -forbiden_penalty
     if action in {'H', 'L','R'}:
         reward-=slow_penalty
     if action in {'H','Ph'}:
         reward-=hold_penalty
-    if not valid:
-        reward -= forbiden_penalty
+    
     elif action in {'Ph', 'Pl'}:
-        reward -= dist_cost*np.min(dist)+block_cost
+        reward += dist_cost*closer-block_cost
     if terminal:
         reward += terminal_reward
     return reward
