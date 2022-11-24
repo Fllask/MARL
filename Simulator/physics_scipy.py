@@ -7,7 +7,7 @@ Created on Mon Sep 19 09:55:31 2022
 import time 
 import numpy as np
 from scipy.optimize import linprog 
-from Blocks import discret_block as Block, Grid, switch_direction,grid2real
+from discrete_blocks import discret_block as Block, Grid, switch_direction,grid2real
 
 
 
@@ -41,16 +41,18 @@ class stability_solver_discrete():
         
         # self.last_sol = np.zeros(0)
         
-    def add_block(self,grid,block,bid):
+    def add_block(self,grid,block,bid,interfaces=None):
+
         #get all the potential supports:
         pot_sup = switch_direction(block.neigh)
         sup = pot_sup[np.nonzero(grid.neighbours[pot_sup[:,0],
                                                  pot_sup[:,1],
                                                  pot_sup[:,2],
-                                                 pot_sup[:,3]]!=-1)]
+                                                 pot_sup[:,3],0]!=-1)]
+  
         ncorners = sup.shape[0]*2
         #get a list of all concerned blocks
-        list_sup = np.unique(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3]])
+        list_sup = np.unique(grid.neighbours[sup[:,0],sup[:,1],sup[:,2],sup[:,3],0])
         
         nAeqcorner = np.zeros((3,ncorners*3))
         
@@ -182,12 +184,12 @@ class stability_solver_discrete():
             row0 = row[0][0]
         else:
             return False
-        self.Aeq[row0:row0+3,rid:rid+6]= [[1,-1,0,0,0,0],
-                                            [0,0,1,-1,0,0],
-                                            [0,0,0,0,1,-1]]
+        self.Aeq[row0:row0+3,rid*6:(rid+1)*6]= [[1,-1,0,0,0,0],
+                                               [0,0,1,-1,0,0],
+                                               [0,0,0,0,1,-1]]
         return True
     def leave_block(self,rid):
-        self.Aeq[:,rid:rid+6]=0
+        self.Aeq[:,rid*6:(rid+1)*6]=0
         
     # def bid2boolarr(self,bid,idx='row'):
     #     return np.nonzero(self.block==bid)

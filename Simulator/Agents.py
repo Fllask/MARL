@@ -7,7 +7,8 @@ Created on Mon Oct 24 13:53:21 2022
 import numpy as np
 import internal_models as im
 import abc
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors            
+    
 class Agent(metaclass=abc.ABCMeta):
     def __init__(self, rid,block_choices):
         super().__init__()
@@ -54,9 +55,12 @@ class Agent(metaclass=abc.ABCMeta):
                     #the robot cannot move from there
                     simulator.hold(self.rid,oldbid)
                 else:
+                    #chect if the block can be held
                     if not simulator.hold(self.rid,bid):
                         simulator.hold(self.rid,oldbid)
                         valid=False
+            else:
+                valid = simulator.hold(self.rid,bid)
         elif action == 'R':
             oldbid = simulator.leave(self.rid)
             if simulator.remove(bid):
@@ -67,7 +71,7 @@ class Agent(metaclass=abc.ABCMeta):
                     simulator.hold(self.rid,oldbid)
             else:
                 simulator.hold(self.rid,oldbid)
-                
+                valid=False
         elif action == 'L':
             oldbid = simulator.leave(self.rid)
             if oldbid is not None:
@@ -104,7 +108,91 @@ class NaiveRandom(Agent):
         rot = np.random.randint(6)
         bid = np.random.randint(np.max(state.occ)+1)
         return act,{'blocktype': blocktype,'pos':[posx,posy],'ori':rot,'bid':bid}
-    
+class A2CLearner(Agent):
+    def __init__(self,
+                 rid,
+                 placement_range,
+                 block_choices,
+                 action_choice = ['Pl','Ph','H','L','R'],
+                 grid_size = [10,10],
+                 max_blocks=30,
+                 n_robots = 2,
+                 n_regions = 2,
+                 discount_f = 0.1,
+                 device='cuda',
+                 use_mask=True
+                 ):
+        super().__init__(rid,block_choices)
+        self.pr = placement_range
+        self.grid_size = grid_size
+        self.n_typeblock = len(block_choices)
+        self.max_blocks = max_blocks
+        self.action_list = generate_actions(len(block_choices),grid_size,max_blocks)
+        
+        
+        #parameters of the internal model:
+        n_fc_layer=2
+        n_neurons=100
+        
+        self.model = im.A2CShared(grid_size,
+                                  max_blocks,
+                                  n_robots,
+                                  n_regions,
+                                  len(self.action_list),
+                                  n_fc_layer =n_fc_layer,
+                                  n_neurons = n_neurons,
+                                  device=device)
+        
+        self.optimizer = im.A2CSharedOptimizer(self.model)
+        
+        self.gamma = 1-discount_f
+        self.use_mask = use_mask
+    def update_policy(self,buffer,buffer_count,batch_size,steps=1):
+        if buffer_count==0:
+            return
+        
+        # _,_,nactions = self.choose_action(nstates,explore=False)
+       
+        #while loss > conv_tol:
+        for s in range(steps):
+            if buffer_count <buffer.shape[0]:
+                batch_size = np.clip(batch_size,0,buffer_count)
+                batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
+            else:
+                batch = np.random.choice(np.delete(buffer,buffer_count%buffer.shape[0]),batch_size,replace=False)
+            #compute the state value using the target Q table
+            if self.use_mask:
+                states = [trans.state[0] for trans in batch]
+                nstates = [trans.new_state[0] for trans in batch]
+                mask = np.array([trans.state[1] for trans in batch])
+                nmask = np.array([trans.new_state[1] for trans in batch])
+                
+            else:
+                states = [trans.state for trans in batch]
+                nstates = [trans.new_state for trans in batch]
+                mask=None
+                nmask=None
+            actions = np.concatenate([trans.a[0] for trans in batch],axis=0)
+            rewards = np.array([[trans.r] for trans in batch],dtype=np.float32)
+            
+            l_v,l_p = self.optimizer.optimize(states,actions,rewards,nstates,self.gamma,mask,nmask)
+            
+    def choose_action(self,state,explore=True,mask=None):
+            
+        if not isinstance(state,list):
+            state = [state]
+        _,actions = self.model(state,inference = True,mask=mask)
+        if explore:
+            actionid = np.zeros(actions.shape[0],dtype=int)
+            for i,p in enumerate(actions.cpu().detach().numpy()):
+                actionid[i] = int(np.random.choice(len(self.action_list),p=p))
+        else:
+            actionid = np.argmax(actions.cpu().detach().numpy(),axis=1)
+        if len(state)==1:
+            action,action_params = vec2act(self.action_list[actionid[0],:],self.n_typeblock,self.grid_size,self.max_blocks)
+            return action,action_params,actionid
+        else:
+            return None,None,actionid
 class QTLearner(Agent):
     def __init__(self,
                  rid,
@@ -134,27 +222,29 @@ class QTLearner(Agent):
         self.gamma = 1-discount_f
         
     def update_policy(self,buffer,buffer_count,batch_size,steps=1):
-        buffer_count = np.clip(buffer_count+1,0,buffer.shape[0])
-        batch_size = np.clip(batch_size,0,buffer_count)
-        batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
-        #compute the state value using the target Q table
-        states = [trans.state for trans in batch]
-        actions = np.concatenate([trans.a[0] for trans in batch],axis=0)
-        rewards = np.array([trans.r for trans in batch])
-        nstates = [trans.new_state for trans in batch]
+        if buffer_count==0:
+            return
         
         # _,_,nactions = self.choose_action(nstates,explore=False)
        
         #while loss > conv_tol:
         for s in range(steps):
+            if buffer_count <buffer.shape[0]:
+                batch_size = np.clip(batch_size,0,buffer_count)
+                batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
+            else:
+                batch = np.random.choice(np.delete(buffer,buffer_count%buffer.shape[0]),batch_size,replace=False)
+            #compute the state value using the target Q table
+            states = [trans.state for trans in batch]
+            actions = np.concatenate([trans.a[0] for trans in batch],axis=0)
+            rewards = np.array([trans.r for trans in batch])
+            nstates = [trans.new_state for trans in batch]
             loss = self.optimizer.optimize(states,actions,rewards,nstates,self.gamma)
 
     def choose_action(self,state,explore=True):
         if not isinstance(state,list):
             state = [state]
         values = self.QT(state,inference = True,prob=True).cpu().detach().numpy()
-        if np.any(np.isnan(values)):
-            self.QT(state,inference = True,prob=True).cpu().detach().numpy()
         if explore:
             actionid = np.zeros(values.shape[0],dtype=int)
             for i,p in enumerate(values):
@@ -209,9 +299,13 @@ class WolpertingerLearner(Agent):
         self.gamma = 1-discount_f
         self.tau = tau
     def update_policy(self,buffer,buffer_count,batch_size,conv_tol = 1e-1,pol_steps=3):
-        buffer_count = np.clip(buffer_count+1,0,buffer.shape[0])
-        batch_size = np.clip(batch_size,0,buffer_count)
-        batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
+        if buffer_count==0:
+            return
+        if buffer_count <buffer.shape[0]:
+            batch_size = np.clip(batch_size,0,buffer_count)
+            batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
+        else:
+            batch = np.random.choice(np.delete(buffer,buffer_count%buffer.shape[0]),batch_size,replace=False)
         #compute the state value using the target Q table
         states = [trans.state for trans in batch]
         actions = np.concatenate([[trans.a[1]] for trans in batch],axis=0)
@@ -302,7 +396,7 @@ def generate_actions(ntype_blocks,grid_size,max_blocks):
                                np.linspace(-1,1,grid_size[0]),
                                np.linspace(-1,1,grid_size[1]),
                                np.linspace(-1,1,6),
-                               indexing='xy')
+                               indexing='ij')
     
     range_Ph = (2*max_blocks, grid_size[0]*grid_size[1]*6*ntype_blocks+2*max_blocks)
     actions[range_Ph[0]:range_Ph[1],0,0]=1
@@ -322,22 +416,51 @@ def generate_actions(ntype_blocks,grid_size,max_blocks):
     actions[-1,4,:]=1
     return np.reshape(actions,(-1,25))
 
+def generate_mask(state,rid,block_type,grid_size,max_blocks):
+    mask = np.zeros((grid_size[0]*grid_size[1]*6*len(block_type)*2+2*max_blocks+1),dtype=bool)
+    #mask the hold and remove:
+    ids = np.unique(state.occ)
+    #remove the -1 and 0
+    ids = ids[2:]
+    
+    #each feasible hold action of ids are placed at ids
+    mask[ids]=True
+    #each feasible remove action is placed at maxblock+ids
+    mask[max_blocks+ids]=True
+    
+    
+    #get the ids of the feasible put actions (note that the are not all hidden)
+    for idb, block in enumerate(block_type):
+        pos,ori = state.touch_side(block)
+        ids = args2idx(pos,ori,grid_size)
+        if not np.all(ids<grid_size[0]*grid_size[1]*6):
+            args2idx(pos,ori,grid_size)
+        #ph
+        mask[idb*np.prod(grid_size)*6+max_blocks*2+ids]=True
+        #pl
+        mask[(len(block_type)+idb)*np.prod(grid_size)*6+max_blocks*2+ids]=True
+    #leave
+    mask[-1]=rid in state.hold
+    return mask
+def args2idx(pos,ori,grid_size):
+    idx =  (pos[:,0]*grid_size[1]*6+pos[:,1]*6+ori).astype(int)
+    return idx
 def reward_link2(action,valid,closer,terminal):
     #reward specific to the case where the robots need to link two points
 
     #add a penalty for holding a block
-    hold_penalty = 3
+    hold_penalty = 0.3
     #add a penalty if no block are put
-    slow_penalty = 4
+    slow_penalty = 0.4
     #add a penatly for forbidden actions
-    forbiden_penalty = 10
+    forbiden_penalty = 1
     #add the terminal reward
-    terminal_reward = 100
+    terminal_reward = 1
     #add a cost for each block
-    block_cost = -1
+    block_cost = -0.1
     #add a cost for the blocks going away from the target, 
     #or a reward if the block is going toward the target
-    dist_cost = 2
+    closer_reward = 0.2
 
     reward = 0
     if not valid:
@@ -348,7 +471,7 @@ def reward_link2(action,valid,closer,terminal):
         reward-=hold_penalty
     
     elif action in {'Ph', 'Pl'}:
-        reward += dist_cost*closer-block_cost
+        reward += closer_reward*closer-block_cost
     if terminal:
         reward += terminal_reward
     return reward
