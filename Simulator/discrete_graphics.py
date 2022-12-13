@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon,Circle,FancyArrowPatch
 import numpy as np
 
-from discrete_blocks import discret_block as Block
-from discrete_blocks import Grid, Graph
+from discrete_blocks_norot import discret_block_norot as Block
+from discrete_blocks_norot import Grid, Graph,FullGraph
 
 from matplotlib import animation
 from IPython.display import HTML
@@ -67,11 +67,17 @@ def draw_action(ax,rid,action,blocktype,animated=False,**action_args):
     elif action == 'L':
         art=draw_leave(ax,**action_args,animated=animated)
     return art
-def draw_action_rel(ax,rid,action,blocktype,animated=False,**action_args):
+def draw_action_rel(ax,rid,action,blocktype,grid,animated=False,**action_args):
     action_args['rid']=rid
     if action == 'Ph':
+        if action_args.get('bid_sup') is None:
+            action_args['bid_sup'] = np.max(grid.occ)
+        grid.connect(blocktype, None, action_args['sideblock'], action_args['sidesup'],action_args['bid_sup'],action_args['side_ori'],idcon=action_args['idconsup'])
         art = draw_put_rel(ax,blocktype,hold=True,**action_args,animated=animated)
     elif action == 'Pl':
+        if action_args.get('bid_sup') is None:
+            action_args['bid_sup'] = np.max(grid.occ)
+        grid.connect(blocktype, None, action_args['sideblock'], action_args['sidesup'],action_args['bid_sup'],idcon=action_args['idconsup'])
         art=draw_put_rel(ax,blocktype,hold=False,**action_args,animated=animated)
     elif action == 'H':
         art=draw_hold(ax,**action_args,animated=animated)
@@ -89,6 +95,7 @@ def draw_put_rel(ax,
                  bid_sup = None,
                  blocktypeid = None,
                  idconsup=None,
+                 side_ori=None,
                  animated=False):
     arts = draw_block(ax, blocktype, color=plt.cm.Set1(rid),animated=animated)
     if hold:
@@ -96,7 +103,7 @@ def draw_put_rel(ax,
         parts = blocktype.parts
         sides = np.concatenate([np.tile(parts,(3,1)),np.repeat(np.arange(3),parts.shape[0])[...,None]],axis=1)
         for side in sides:
-            arts+= draw_side(ax, side,color='k',animated=animated)
+            arts+= draw_side(ax, side,color='k',linewidth=0.5,animated=animated)
     return arts
 def draw_put(ax,blocktype,rid,hold,pos,ori,blocktypeid,animated=False):
     arts = draw_block(ax, blocktype, pos, ori, color=plt.cm.Set1(rid),animated=animated)
@@ -121,7 +128,7 @@ def draw_remove(ax,rid,bid=None, pos=None,ori=None,animated=False):
     if bid is None:
         arts = fill_triangle(ax, pos+ori%2, color='k',animated=animated)
         side = pos+ori//2
-        arts+= draw_side(ax, side,color=plt.cm.Set1(rid),animated=animated)
+        arts+= draw_side(ax, side,color=plt.cm.Set1(rid),linewidth=0.5,animated=animated)
     else:
         art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to remove block {bid}",color = plt.cm.Set1(rid),animated=animated)
         arts = [art]
@@ -177,10 +184,16 @@ def draw_side(ax,coord,color=None,animated=False,linewidth=2):
     p2xy = base @ p2
     art = ax.plot([p1xy[0],p2xy[0]],[p1xy[1],p2xy[1]],color=color,alpha=1,linewidth=linewidth,animated=animated)
     return art
-def add_graph(ax,graph,animated=False):
+def add_graph(ax,graph,animated=False,connectivity = 'sparse'):
     arts = []
-    xys = base @ graph.blocks[2:-1,:]
-    xys = np.concatenate([base @ graph.grounds[2:-1,:], xys],axis=1)
+    if connectivity == 'sparse':
+        xys = base @ graph.blocks[2:-1,:]
+        xys = np.concatenate([base @ graph.grounds[2:-1,:], xys],axis=1)
+    elif connectivity == 'full':
+        xys = base @ graph.blocks[2:-2,:]
+        xys = np.concatenate([base @ graph.actions[2:-2,:], base @ graph.grounds[2:-2,:], xys],axis=1)
+    #remove the unactive nodes
+    xys = xys[:,graph.active_nodes]
     #add the grounds
     coords, inv, counts = np.unique(xys,return_counts=True,return_inverse = True,axis=1)
     for doubleid in np.nonzero(counts==2)[0]:
@@ -194,8 +207,9 @@ def add_graph(ax,graph,animated=False):
     for s,r in zip(graph.i_s.T,graph.i_r.T):
         if np.sum(s)==0:
             continue
-        ids = np.nonzero(s)[0]
-        idr = np.nonzero(r)[0]
+        ids = np.nonzero(s[graph.active_nodes])[0]
+        idr = np.nonzero(r[graph.active_nodes])[0]
+
         
         arts.append(FancyArrowPatch(xys[:,ids].flatten(),xys[:,idr].flatten(),
                                     arrowstyle='->',
@@ -260,7 +274,8 @@ def fill_grid(ax,
               animated=False,
               draw_hold = True,
               ground_color='darkslategrey',
-              graph = None):
+              graph = None,
+              connectivity = None):
     ids = np.unique(grid.occ)
     arts = []
     if animated:
@@ -328,13 +343,13 @@ def fill_grid(ax,
                 for coord in coords:
                     arts+=draw_side(ax, coord,color=plt.cm.Set1(i),animated=animated)
     if graph is not None:
-        arts+= add_graph(ax, graph,animated = animated)
+        arts+= add_graph(ax, graph,animated = animated,connectivity=connectivity)
     return arts
 def animate(fig,arts_list,sperframe= 0.1):
     ani = animation.ArtistAnimation(fig, arts_list, interval=sperframe*1000, blit=True)
-    HTML(ani.to_jshtml())
+    #HTML(ani.to_jshtml())
     return ani
-def draw_block(ax,block, pos=None,ori=None,draw_neigh=False,highlight_ref = False,animated=False, **colorkw):
+def draw_block(ax,block, pos=None,ori=None,draw_neigh=True,highlight_ref = False,animated=False, **colorkw):
     if ori is not None:
         block.turn(ori)
     if pos is not None:
@@ -343,8 +358,8 @@ def draw_block(ax,block, pos=None,ori=None,draw_neigh=False,highlight_ref = Fals
     if highlight_ref:
         arts+=fill_triangle(ax,[block.parts[0]],animated=animated,color = 'none',text='0')
     if draw_neigh:
-        for s in block.neigh:
-            arts+=draw_side(ax,s,color='k',animated=animated)
+        for i,s in enumerate(block.neigh):
+            arts+=draw_side(ax,s,color=plt.cm.turbo(i/block.neigh.shape[0]),animated=animated)
     return arts
 def save_anim(ani,name='animation',ext = 'html'):
     if ext == 'html':
@@ -359,7 +374,7 @@ if __name__ == "__main__":
     print("Start test")
     plt.close()
     
-    maxs = [9,6]
+    maxs = [10,10]
     grid = Grid(maxs)
     graph = Graph(2,
                  2,
@@ -367,85 +382,27 @@ if __name__ == "__main__":
                  10,
                  30,
                  )
+    full_graph = FullGraph(2,2,2,1,10)
     t = Block([[0,0,1],[0,0,0]])
     #ground = Block([[0,0,0],[2,0,0],[6,0,0],[8,0,0]]+[[i,0,1] for i in range(0,maxs[0])])
     ground = Block([[0,0,1]])
     #ground = Block([[0,0,0],[maxs[0]-1,0,0]]+[[i,0,1] for i in range(0,maxs[0])],muc=0.7)
     hinge = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
-    link = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
     
-    _,_,i=grid.put(ground,[1,0],0,0,floating=True)
-    graph.add_ground([1,0], 0)
-    grid.put(ground,[7,0],0,0,floating=True)
-    graph.add_ground([7,0], 0)
-    
-    
-    _,_,i=grid.put(hinge,[0,2],3,1)
-    graph.add_block(1, 0, [0,2], 3)
-    for side1,interface in enumerate(i):
-        if interface[0]==-1:
-            continue
-        graph.add_rel(1,interface[0],side1,interface[1],interface[2])
-        
-        
-    _,_,i=grid.put(link,[0,2],0,2)
-    graph.add_block(2, 1, [0,2], 2)
-    for side1,interface in enumerate(i):
-        if interface[0]==-1:
-            continue
-        graph.add_rel(2,interface[0],side1,interface[1],interface[2])
-    
-    _,_,i=grid.put(hinge,[1,3],0,3)
-    graph.add_block(3, 0, [1,3], 0)
-    for side1,interface in enumerate(i):
-        if interface[0]==-1:
-            continue
-        graph.add_rel(3,interface[0],side1,interface[1],interface[2])
-        
-    _,_,i=grid.put(link,[1,5],5,5)
-    graph.add_block(5, 1, [1,5], 5)
-    for side1,interface in enumerate(i):
-        if interface[0]==-1:
-            continue
-        graph.add_rel(5,interface[0],side1,interface[1],interface[2])
-    # grid.remove(5)
-    
-    
-    _,_,i=grid.put(hinge,[7,0],0,8)
-    graph.add_block(8, 0, [7,0], 0)
-    for side1,interface in enumerate(i):
-        if interface[0]==-1:
-            continue
-        graph.add_rel(8,interface[0],side1,interface[1],interface[2])
-        
-        
-    # grid.put(link,[5,3],4,7)
-    _,_,i=grid.put(link,[5,3],4,7)
-    graph.add_block(7, 1, [5,3], 4)
-    for side1,interface in enumerate(i):
-        if interface[0]==-1:
-            continue
-        graph.add_rel(7,interface[0],side1,interface[1],interface[2])
-    
-    _,_,i=grid.put(hinge,[4,3],0,6,holder_rid=1)
-    graph.add_block(6, 0, [4,3], 0)
-    for side1,interface in enumerate(i):
-        if interface[0]==-1:
-            continue
-        graph.add_rel(6,interface[0],side1,interface[1],interface[2])
-    #grid.put(link,[4,5],0,2,floating=True)
-    #write_state(grid,h=6)
-    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=False,h=10,linewidth=0.3)
-    fill_grid(ax,grid,draw_neigh=True,animated=True,graph=graph)
-    
-    #draw_put(ax,link,0,True,[5,5],-1,1,animated=False)
-    #draw_put(ax,link,1,True,[5,3],-2,1,animated=False)
-    #draw_put(ax,link,0,False,[4,5],-1,1,animated=False)
-    #
-    #draw_block(ax,hinge,[4,4],color = 'none',draw_neigh = True)
-    # draw_block(ax, link, [4,5],draw_neigh = True,color = 'r')
-    a = 199
-    #draw_block(ax,t,[4,4],color = 'yellowgreen',draw_neigh = True)
-    #draw_block(ax,t,[4,4],color = 'darkred',draw_neigh = True)
+    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
+    linkl = Block([[1,0,1],[1,0,0],[0,1,1],[1,1,0],[1,1,1],[2,0,0]])
+    linkh = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[1,2,1],[2,0,0]])
+    _,_,i=grid.put(ground,[1,0],0,floating=True)
+    grid.put(ground,[7,0],0,floating=True)
+    grid.put(hinge,[1,0],1)
+    grid.put(linkr,[0,2],2)
+    grid.put(hinge,[1,3],3)
+    grid.put(linkh,[2,3],4)
+    grid.put(hinge,[4,3],5)
+    grid.put(linkl,[5,2],6)
+    grid.put(hinge,[7,0],7)
+    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=True,h=10,linewidth=0.3)
+    draw_block(ax, hinge,[4,0],highlight_ref=True,draw_neigh=True)
+    fill_grid(ax,grid,draw_neigh=True,animated=True,connectivity = 'sparse')
     plt.show()
     print("End test")

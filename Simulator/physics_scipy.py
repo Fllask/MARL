@@ -219,7 +219,7 @@ class stability_solver_discrete():
 #     coefs[sides0idxs*3+2,:]=0
 #     return coefs
     
-def side2corners(sides):
+def side2corners(sides,security_factor=0.1):
     #return the real coordinates of the two corners of the sides
     #note that p1(side)==p1(switch direction(side))
     
@@ -229,10 +229,15 @@ def side2corners(sides):
     #first put each corner at the leftest point
     corners = grid2real(upsides)
     corners = np.stack([corners,corners],axis=1)
-    corners[upsides[:,3]==0,1,:] = corners[upsides[:,3]==0,1,:]+[1,0]
-    corners[upsides[:,3]==1,0,:] = corners[upsides[:,3]==1,0,:]+[1,0]
-    corners[upsides[:,3]==1,1,:] = corners[upsides[:,3]==1,1,:]+[0.5,np.sqrt(3)/2]
-    corners[upsides[:,3]==2,0,:] = corners[upsides[:,3]==2,0,:]+[0.5,np.sqrt(3)/2]
+    corners[upsides[:,3]==0,0,:] = corners[upsides[:,3]==0,0,:]+[security_factor/2,0]
+    corners[upsides[:,3]==0,1,:] = corners[upsides[:,3]==0,1,:]+[1-security_factor/2,0]
+    
+    corners[upsides[:,3]==1,0,:] = corners[upsides[:,3]==1,0,:]+[1-security_factor/4,np.sqrt(3)/2*security_factor]
+    corners[upsides[:,3]==1,1,:] = corners[upsides[:,3]==1,1,:]+[0.5+security_factor/4,np.sqrt(3)/2*(1-security_factor)]
+    
+    
+    corners[upsides[:,3]==2,0,:] = corners[upsides[:,3]==2,0,:]+[0.5-security_factor/4,np.sqrt(3)/2*(1-security_factor)]
+    corners[upsides[:,3]==2,1,:] = corners[upsides[:,3]==2,1,:]+[security_factor/4,np.sqrt(3)/2*security_factor]
     return corners
 
 def get_cm(parts):

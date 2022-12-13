@@ -15,27 +15,35 @@ class Graph():
                  ):
         self.bt = n_blocktype
         self.n_robot = n_robot
+        self.n_nodes = n_reg+maxblocks
         self.mblock = maxblocks
         self.minter = maxinterface
         self.blocks = np.zeros((5,maxblocks),int)
         self.grounds = np.zeros((5,n_reg),int)
-        self.i_s = np.zeros((n_reg+maxblocks,maxinterface),int)
-        self.i_r = np.zeros((n_reg+maxblocks,maxinterface),int)
+        self.robots = np.zeros((5,n_robot),int)
+        self.i_s = np.zeros((self.n_nodes,maxinterface),int)
+        self.i_r = np.zeros((self.n_nodes,maxinterface),int)
         self.i_a = np.zeros((1,maxinterface),int)
         self.n_reg = n_reg
+        self.active_nodes = np.zeros((self.n_nodes),bool)
+        self.active_edges = np.zeros((maxinterface),bool)
         self.n_ground = 0
         self.n_blocks = 0
         self.n_interface = 0
+        
+        #initialise the robot nodes 
     def add_ground(self,pos,rot):
         #note: it is assumed that all the grounds have are the same block 
         assert self.n_ground < self.n_reg, "Attempt to add more grounds than regions"
         self.grounds[:2,self.n_ground]=-1
         self.grounds[2:,self.n_ground]=[pos[0],pos[1],rot]
+        self.active_nodes[self.n_ground]=True
         self.n_ground+=1
     def add_block(self,bid,blocktypeid,pos,rot):
         self.blocks[0,bid-1]=blocktypeid
         self.blocks[1,bid-1]=-1
         self.blocks[2:,bid-1]=[pos[0],pos[1],rot]
+        self.active_nodes[self.n_reg+bid-1]=True
         self.n_blocks+=1
     def hold(self,bid,rid):
         self.blocks[1,bid-1]=rid
@@ -49,20 +57,77 @@ class Graph():
                 self.i_r[bid1-1+self.n_reg,self.n_interface]=1
                 self.i_s[bid2-1+self.n_reg,self.n_interface]=1
                 self.i_a[:,self.n_interface]=side1
+            self.active_edges[self.n_interface]=True
             self.n_interface+=1
+            
         if bid2 > 0:
             self.i_r[bid2-1+self.n_reg,self.n_interface]=1
             self.i_s[bid1-1+self.n_reg,self.n_interface]=1
             self.i_a[:,self.n_interface]=side2
+            self.active_edges[self.n_interface]=True
             self.n_interface+=1
     def remove(self,bid):
         assert bid >0, "cannot remove the ground"
         self.blocks[:,bid-1]=0
+        self.active_nodes[bid-1]=False
         interfaces_to_delete = np.nonzero((self.i_r[bid-1+self.n_reg,:])|(self.i_s[bid-1+self.n_reg,:]))
+        self.active_edges[interfaces_to_delete]=False
         self.i_a[:,interfaces_to_delete]=0
         self.i_r[:,interfaces_to_delete]=0
         self.i_s[:,interfaces_to_delete]=0
+class FullGraph():
+    def __init__(self,
+                 n_blocktype,
+                 n_robot,
+                 n_reg,
+                 n_sim_actions,
+                 maxblocks,
+                 
+                 ):
+        self.bt = n_blocktype
+        self.n_robot = n_robot
+        self.n_nodes = n_sim_actions+n_reg+maxblocks
+        self.mblock = maxblocks
+        self.n_act = n_sim_actions
+        self.actions = np.zeros((6,n_sim_actions),int)
+        self.blocks = np.zeros((6,maxblocks),int)
+        self.grounds = np.zeros((6,n_reg),int)
+        self.i_s = np.zeros((self.n_nodes, self.n_nodes*self.n_nodes),int)
+        self.i_s[np.tile(np.arange(self.n_nodes),self.n_nodes),np.arange(self.i_s.shape[1])]=1
+        self.i_r = np.zeros((self.n_nodes, self.n_nodes*self.n_nodes),int)
+        self.i_r[np.repeat(np.arange(self.n_nodes),self.n_nodes),np.arange(self.i_r.shape[1])]=1
+        self.i_a = np.zeros((0,self.n_nodes*self.n_nodes),int)
+        self.n_reg = n_reg
+        self.active_nodes = np.zeros((self.n_nodes),bool)
+        self.active_edges = np.zeros((self.n_nodes*self.n_nodes),bool)
+        #initialize the first action
+        self.active_nodes[:n_sim_actions]=True
+        self.actions[0,:] = -2
+        self.actions[1,:] = np.arange(n_sim_actions)
+        #leave the other parameters at 0
         
+        self.n_ground = 0
+        self.n_blocks = 0
+        self.n_interface = 0
+        
+        #initialise the robot nodes 
+    def add_ground(self,pos,rot):
+        #note: it is assumed that all the grounds have are the same block 
+        assert self.n_ground < self.n_reg, "Attempt to add more grounds than regions"
+        self.grounds[:2,self.n_ground]=-1
+        self.grounds[2:,self.n_ground]=[pos[0],pos[1],np.cos(rot*np.pi/3),np.sin(rot*np.pi/3)]
+        self.active_nodes[self.n_act+self.n_ground]=True
+        self.active_edges[(self.i_r[self.n_act+self.n_ground,:]==1) | (self.i_s[self.n_act+self.n_ground,:]==1)]=True
+        self.n_ground+=1
+    def add_block(self,bid,blocktypeid,pos,rot):
+        self.blocks[0,bid-1]=blocktypeid
+        self.blocks[1,bid-1]=-1
+        self.blocks[2:,bid-1]=[pos[0],pos[1],np.cos(rot*np.pi/3),np.sin(rot*np.pi/3)]
+        self.active_nodes[self.n_reg+self.n_act+bid-1]=True
+        self.active_edges[(self.i_r[self.n_reg+self.n_act+bid-1,:]==1) | (self.i_s[self.n_reg+self.n_act+bid-1,:]==1)]=True
+        self.n_blocks+=1
+    def hold(self,bid,rid):
+        self.blocks[1,bid-1]=rid
 class Grid():
     def __init__(self,maxs):
         self.occ = -np.ones((maxs[0]+1,maxs[1]+1,2),dtype=int)
@@ -132,10 +197,8 @@ class Grid():
         ndist = np.zeros(self.nreg)
         #distb = np.zeros(targets.shape[0])
         closer = -1
-        
         for i in targets:
             distb = closest_point(block.parts,np.array(np.nonzero(self.connection==i)).T)
-            
             
             #ndist[i] = (distb-self.min_dist[connect_region[0],i])/(distb+self.min_dist[connect_region[0],i]+1e-5)
            
@@ -219,37 +282,37 @@ class Grid():
         else:
             supportsides = np.array(np.nonzero((self.neighbours[:,:,:,:,0]==support_bid) & 
                                                (self.neighbours[:,:,:,:,1]==support_sideid))).T
-        if support_sideid >= supportsides.shape[0]:
+        if supportsides.shape[0]==0:
             return False,None,None
         target = switch_direction(supportsides)
         block.connect(sideid,target[0])
-        
-        if (np.min(block.parts)<0 or
-            np.max(block.parts[:,0])>=self.occ.shape[0]-1 or
-            np.max(block.parts[:,1])>=self.occ.shape[1]-1):
-            return False,None,None
-        #test if there is no overlap
-        if np.any(self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]!=-1):
-            return False,None,None
-        else:
-            #add the block
-            self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=bid
-            self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],0]=bid
-            self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],1]=np.arange(len(block.neigh))
-            if holder_rid is not None:
-                self.hold[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=holder_rid
-            
-            #get the interfaces for the graph
-            pot_support = switch_direction(block.neigh)
-            interfaces = self.neighbours[pot_support[:,0],pot_support[:,1],pot_support[:,2],pot_support[:,3]]
-            #add the connected region to the interfaces:
-            interfaces =np.concatenate([interfaces,
-                                        self.connection[pot_support[:,0],pot_support[:,1],pot_support[:,2]][...,None]],
-                                       axis=1)
-            #take care of the connectivity of the different regions
-            closer = self.update_dist(block)
+        if bid is not None:
+            if (np.min(block.parts)<0 or
+                np.max(block.parts[:,0])>=self.occ.shape[0]-1 or
+                np.max(block.parts[:,1])>=self.occ.shape[1]-1):
+                return False,None,None
+            #test if there is no overlap
+            if np.any(self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]!=-1):
+                return False,None,None
+            else:
+                #add the block
+                self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=bid
+                self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],0]=bid
+                self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],1]=np.arange(len(block.neigh))
+                if holder_rid is not None:
+                    self.hold[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=holder_rid
                 
-            return True,closer,interfaces
+                #get the interfaces for the graph
+                pot_support = switch_direction(block.neigh)
+                interfaces = self.neighbours[pot_support[:,0],pot_support[:,1],pot_support[:,2],pot_support[:,3]]
+                #add the connected region to the interfaces:
+                interfaces =np.concatenate([interfaces,
+                                            self.connection[pot_support[:,0],pot_support[:,1],pot_support[:,2]][...,None]],
+                                           axis=1)
+                #take care of the connectivity of the different regions
+                closer = self.update_dist(block)
+                    
+                return True,closer,interfaces
 def closest_point(parts1,parts2):
     if parts1.shape[0]==0 or parts2.shape[0]==0:
         return np.nan

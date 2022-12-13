@@ -24,17 +24,25 @@ class Transition():
         self.r = reward
         self.new_state = new_state
 class DiscreteSimulator():
-    def __init__(self,maxs,n_robots,block_choices,n_reg,maxblocks,maxinterface):
+    def __init__(self,maxs,n_robots,block_choices,n_reg,maxblocks,maxinterface,n_sim_actions = 1):
         self.grid = Grid(maxs)
+        self.max_block = maxblocks
+        self.max_interface = maxinterface
         self.blocks = block_choices
         self.graph = Graph(len(block_choices),
                        	  n_robots,
                            n_reg,
                            maxblocks,
                            maxinterface,)
+        #self.fullgraph = FullGraph(len(block_choices),
+                              # n_robots,
+                              # n_reg,
+                             #  n_sim_actions,
+                             #  maxblocks,)
         # self.prev = Backup(maxs)
         self.ph_mod = ph(n_robots = n_robots)
         self.nbid=1
+        self.ninterface = 1
         self.prev = None
     def setup_anim(self,h=6):
         self.frames = []
@@ -43,32 +51,46 @@ class DiscreteSimulator():
         self.grid.put(block,pos,rot,0,floating=True)
         self.graph.add_ground(pos, rot)
     def put(self,block,pos,rot,blocktypeid=None):
+        if self.nbid == self.max_block:
+            return False, None
         if blocktypeid is not None:
             block = self.blocks[blocktypeid]
         else:
             blocktypeid = -1
         valid, closer,interfaces = self.grid.put(block, pos, rot, self.nbid)
+        
         if valid:
             self.graph.add_block(self.nbid,blocktypeid, pos, rot)
+            self.fullgraph.add_block(self.nbid, blocktypeid, pos, block.rot)
             for side1,interface in enumerate(interfaces):
+                if self.ninterface == self.max_interface:
+                    return False,None
                 if interface[0]==-1:
                     continue
                 self.graph.add_rel(self.nbid,interface[0],side1,interface[1])
+                self.ninterface+=1
             self.ph_mod.add_block(self.grid,block,self.nbid)
             self.nbid+=1
 
         return valid,closer
-    def put_rel(self,block,idsideblock,idsidesup,idblocksup,blocktypeid=None,idconsup=None):
+    def put_rel(self,block,idsideblock,idsidesup,idblocksup,blocktypeid=None,idconsup=None,no_rot=False):
         if blocktypeid is not None:
             block = self.blocks[blocktypeid]
         else:
             blocktypeid = -1
-            
-        if idsideblock >= block.neigh.shape[0]:
-            pass
+          
+        if no_rot:
+            supportsides = np.array(np.nonzero((self.grid.neighbours[:,:,:,:,0]==support_bid) & 
+                                                   (self.grid.neighbours[:,:,:,:,1]==idsidesup))).T
+            if support_bid ==0:
+                supportsides =  supportsides[self.grid.connection[supportsides[:,0],supportsides[:,1],supportsides[:,2]]==idcon,:]
+            selected_side = supportsides[idsidesup]
+            validsideblockid, = np.nonzero((block.neigh[:,2] !=selected_side[2])&(block.neigh[:,3] ==selected_side[3]))
+            idsideblock = validsideblockid[idsideblock]
         valid, closer,interfaces = self.grid.connect(block, self.nbid, idsideblock, idsidesup,idblocksup,idcon=idconsup)
         if valid:
             self.graph.add_block(self.nbid, blocktypeid, block.parts[0,:2], block.rot)
+            #self.fullgraph.add_block(self.nbid, blocktypeid, block.parts[0,:2], block.rot)
             for side1,interface in enumerate(interfaces):
                 if interface[0]==-1:
                     continue
@@ -141,10 +163,13 @@ class DiscreteSimulator():
     def add_frame(self):
         '''add a frame to later animate the simulation'''
         self.frames.append(gr.fill_grid(self.ax, self.grid,animated=True))
-    def draw_act(self,rid,action,blocktype,**action_params):
-        state = gr.fill_grid(self.ax, self.grid,animated=True)
+    def draw_act(self,rid,action,blocktype,prev_state=None,**action_params):
+        if prev_state is not None:
+            state =  gr.fill_grid(self.ax, prev_state['grid'],animated=True)
+        else:
+            state = gr.fill_grid(self.ax, self.grid,animated=True)
         if 'sideblock' in action_params.keys():
-            self.frames.append(state+gr.draw_action_rel(self.ax,rid,action,blocktype,animated=True,**action_params))
+            self.frames.append(state+gr.draw_action_rel(self.ax,rid,action,blocktype,prev_state['grid'],animated=True,**action_params))
         else:
             self.frames.append(state+gr.draw_action(self.ax,rid,action,blocktype,animated=True,**action_params))
     def animate(self):

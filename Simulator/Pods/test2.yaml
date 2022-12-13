@@ -1,0 +1,12 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: pytorch-pod
+spec:
+  containers:
+  - name: gpu-container
+    image: pdm-sim
+    command: ["sleep", "3600"]
+    resources:
+      limits:
+        nvidia.com/gpu: 1
