@@ -45,9 +45,9 @@ class DiscreteSimulator():
         self.nbid=1
         self.ninterface = 1
         self.prev = None
-    def setup_anim(self,h=6):
+    def setup_anim(self,h=12):
         self.frames = []
-        self.fig,self.ax = gr.draw_grid(self.grid.occ.shape[:2],color='none',h=h)
+        self.fig,self.ax = gr.draw_grid(self.grid.occ.shape[:2],color='k',h=h)
     def add_ground(self,block,pos):
         valid,_,_=self.grid.put(block,pos,0,floating=True)
         assert valid, "Invalid target placement"
@@ -160,20 +160,28 @@ class DiscreteSimulator():
         return True
     def check(self):
         res = self.ph_mod.solve()
-        assert res.status in [0,2],"error in the static solver"
+        if res.status not in [0,2]:
+            print("warning: error in the static solver")
         return res.status == 0
     def add_frame(self):
         '''add a frame to later animate the simulation'''
-        self.frames.append(gr.fill_grid(self.ax, self.grid,animated=True))
-    def draw_act(self,rid,action,blocktype,prev_state=None,**action_params):
-        if prev_state is not None:
-            state =  gr.fill_grid(self.ax, prev_state['grid'],animated=True)
+        self.frames.append(gr.fill_grid(self.ax, self.grid,animated=True,draw_hold=False,forces_bag=self.ph_mod))
+    def draw_act(self,rid,action,blocktype,prev_state=None,redraw_state=True,**action_params):
+        if redraw_state:
+            if prev_state is not None:
+                state =  gr.fill_grid(self.ax, prev_state['grid'],animated=True,draw_hold=False,forces_bag=prev_state['forces'])
+            else:
+                state = gr.fill_grid(self.ax, self.grid,animated=True,draw_hold=False,forces_bag=self.ph_mod)
+            if 'sideblock' in action_params.keys():
+                self.frames.append(state+gr.draw_action_rel(self.ax,rid,action,blocktype,prev_state['grid'],animated=True,**action_params))
+            else:
+                self.frames.append(state+gr.draw_action(self.ax,rid,action,blocktype,animated=True,**action_params))
         else:
-            state = gr.fill_grid(self.ax, self.grid,animated=True)
-        if 'sideblock' in action_params.keys():
-            self.frames.append(state+gr.draw_action_rel(self.ax,rid,action,blocktype,prev_state['grid'],animated=True,**action_params))
-        else:
-            self.frames.append(state+gr.draw_action(self.ax,rid,action,blocktype,animated=True,**action_params))
+            #add the action to the last frame
+            if 'sideblock' in action_params.keys():
+                self.frames[-1] += gr.draw_action_rel(self.ax,rid,action,blocktype,prev_state[rid]['grid'],animated=True,multi=True,**action_params)
+            else:
+                self.frames[-1] +=gr.draw_action(self.ax,rid,action,blocktype,animated=True,multi=True,**action_params)
     def animate(self):
         anim = gr.animate(self.fig, self.frames)
         plt.close()
@@ -455,16 +463,40 @@ def scenario6(sim):
 def column_check(sim):
     hexagon = Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7)
     sim.setup_anim()
-    sim.add_ground(Block([[0,0,1],[-1,0,0]]),[1,0])
+    sim.add_ground(Block([[0,0,1]]),[sim.grid.shape[0]//2,0])
     sim.add_frame()
     sim.put_rel(hexagon,0,0,0,0,idconsup=0)
     sim.add_frame()
     valid = True
     n=1
+    nr=sim.ph_mod.nr
     while valid:
+        idr = n%nr
         sim.put_rel(hexagon,0,0,n,4,idconsup=0)
-        sim.leave(0)
-        sim.hold(0,n+1)
+        sim.leave(idr)
+        sim.hold(idr,n+1)
+        n+=1
+
+        sim.add_frame()
+        valid=sim.check()
+       
+    anim = sim.animate()
+    return anim
+def column_check_right(sim):
+    hexagon = Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7)
+    sim.setup_anim()
+    sim.add_ground(Block([[0,0,1]]),[sim.grid.shape[0]//2,0])
+    sim.add_frame()
+    sim.put_rel(hexagon,0,0,0,0,idconsup=0)
+    sim.add_frame()
+    valid = True
+    n=1
+    nr=sim.ph_mod.nr
+    while valid:
+        idr = n%nr
+        sim.put_rel(hexagon,0,0,n,5,idconsup=0)
+        sim.leave(idr)
+        sim.hold(idr,n+1)
         n+=1
         sim.add_frame()
         valid=sim.check()
@@ -481,12 +513,13 @@ def arch_check(sim):
     valid = True
     n=1
     h=1
+    nr=sim.ph_mod.nr
     while valid:
         for i in range(h):
-            
+            rid=n%nr
             sim.put_rel(hexagon,0,0,n,4,idconsup=0)
-            sim.leave(0)
-            sim.hold(0,n+1)
+            sim.leave(rid)
+            sim.hold(rid,n+1)
             n+=1
             sim.add_frame()
             valid=sim.check()
@@ -495,16 +528,17 @@ def arch_check(sim):
                 break
         if valid:
             for i in range(h):
+                idr = n%nr
                 sim.put_rel(hexagon,0,0,n,2,idconsup=0)
-                sim.leave(0)
-                sim.hold(0,n+1)
+                sim.leave(idr)
+                sim.hold(idr,n+1)
                 n+=1
                 sim.add_frame()
                 valid=sim.check()
                 if not valid:
                     print(f"{h=}")
                     break
-            sim.leave(0)
+            [sim.leave(idr) for idr in range(nr)]
             for i in range(n,1,-1):
                 sim.remove(i,save=False)
             n=1
@@ -662,10 +696,10 @@ def generate_mask(state,rid,n_side,last_only,max_blocks,n_robots):
     return mask
 if __name__ == '__main__':
     print("Start test simulator")
-    maxs = [20,20]
+    maxs = [30,10]
     choices = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7),#hexagone
                Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7)]#link
-    sim = DiscreteSimulator(maxs,2,choices,1,100,100)
+    sim = DiscreteSimulator(maxs,1,choices,1,1000,1000)
     time0 = time.perf_counter()
     
     #grid,bid,ani = scenario1(maxs,n_block=200,maxtry=10000,draw=True)

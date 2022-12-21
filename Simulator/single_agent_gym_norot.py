@@ -13,7 +13,7 @@ import numpy as np
 import pickle
 from discrete_blocks_norot import discret_block_norot as Block
 from internal_models import ReplayBufferGraph
-from relative_single_agent import reward_link2,SACSupervisorSparse
+from relative_single_agent import reward_link2,SACSupervisorSparse,reward_link3
 #from single_agent import reward_link2,A2CSupervisor,A2CSupervisorStruc,generate_mask_supervisor,vec2act_sup
 from discrete_simulator_norot import DiscreteSimulator as Sim,Transition as Trans
 import discrete_graphics as gr
@@ -118,7 +118,7 @@ class ReplayDiscreteGymSupervisor():
             mask = None
         for step in range(max_steps):
             for idr in range(self.n_robots):
-                prev_state = {'grid':copy.deepcopy(self.sim.grid),'graph': copy.deepcopy(self.sim.graph),'mask':mask.copy()}
+                prev_state = {'grid':copy.deepcopy(self.sim.grid),'graph': copy.deepcopy(self.sim.graph),'mask':mask.copy(),'forces':copy.deepcopy(self.sim.ph_mod)}
                 
                 action,action_args,*action_enc = self.agent.choose_action(idr,self.sim,mask=mask)
                 
@@ -148,7 +148,8 @@ class ReplayDiscreteGymSupervisor():
                                                                     reward,
                                                                    {'grid':copy.deepcopy(self.sim.grid),
                                                                     'graph': copy.deepcopy(self.sim.graph),
-                                                                    'mask':mask})
+                                                                    'mask':mask,
+                                                                    'forces':copy.deepcopy(self.sim.ph_mod)})
                     buffer_count +=1
                 self.agent.update_policy(buffer,buffer_count,batch_size)
             
@@ -167,84 +168,17 @@ class ReplayDiscreteGymSupervisor():
         else:
             anim = None
         
-        return rewards_ar,step, anim,buffer,buffer_count
-    def episode_multistep(self,
-                          max_steps = 20,
-                          draw=False,
-                          buffer=np.zeros(0),
-                          buffer_count=0,
-                          batch_size=32,
-                          use_mask=True):
-        success = False
-        failure = False
-        rewards_ar = np.zeros((self.n_robots,max_steps))
-        self.sim =copy.deepcopy(self.setup)
-        if draw:
-            self.sim.setup_anim()
-            self.sim.add_frame()
-        for step in range(max_steps):
-            for idr in range(self.n_robots):
-                valid = False
-                if use_mask:
-                    mask = self.agent.generate_mask(self.sim.grid,
-                                                    idr)
-                    prev_state = [copy.deepcopy(self.sim.grid),copy.deepcopy(self.sim.graph),mask.copy()]
-                else:
-                    prev_state = [copy.deepcopy(self.sim.grid),copy.deepcopy(self.sim.graph)]
-                    mask = None
-                n_tries = 0
-                while not valid:
-                    if np.sum(mask)==0:
-                        #no actions are possible: end the episode
-                        failure = True
-                        valid=True
-                    else:
-                        n_tries +=1
-                        action,action_args,*action_enc = self.agent.choose_action(idr,self.sim.grid,mask=mask)
-                        valid,closer,blocktype = self.agent.Act(self.sim,action,**action_args)
-                        
-                    if valid:
-                        if np.all(self.sim.grid.min_dist < 1e-5) and np.all(self.sim.grid.hold==-1):
-                            success = True
-                            mask['terminal']=True
-                    else:
-                        #remove the action from the mask so it cannot be chosen anymore
-                        if use_mask:
-                            mask['out_action'][action_enc[0]]=False
-                    reward =self.rewardf(action, valid, closer, success,failure)
-                    
-                    rewards_ar[idr,step]=reward/n_tries+rewards_ar[idr,step]*(n_tries-1)/n_tries
-                    buffer[(buffer_count)%buffer.shape[0]] = Trans(prev_state,
-                                                                   action_enc,
-                                                                   reward,
-                                                                   [copy.deepcopy(self.sim.grid),mask])
-                    buffer_count +=1
-                    self.agent.update_policy(buffer,buffer_count,batch_size)
-                
-                if draw:
-                    action_args.pop('rid')
-                    self.sim.draw_act(idr,action,blocktype,**action_args)
-                    self.sim.add_frame()
-                        
-                if success or failure:
-                    break
-            if success or failure:
-                break
-        if draw:
-            anim = self.sim.animate()
-        else:
-            anim = None
-        
-        return rewards_ar,step, anim,buffer,buffer_count
+        return rewards_ar,step, anim,buffer,buffer_count,success
     
     def training(self,
                 pfreq = 10,
                 draw_freq=100,
                 max_steps=100,
                 save_freq = 1000,
+                success_rate_decay = 0.01,
                 log_dir=None):
         
-        
+        success_rate = 0
         if log_dir is None:
             log_dir = os.path.join('log','log'+str(np.random.randint(10000000)))
             os.mkdir(log_dir)
@@ -262,17 +196,24 @@ class ReplayDiscreteGymSupervisor():
         print("Training started")
         for episode in range(self.config['train_n_episodes']):
             (rewards_ep,n_steps_ep,
-             anim,buffer,buffer_count) = self.episode_restart(max_steps,
+             anim,buffer,buffer_count, success) = self.episode_restart(max_steps,
                                                               draw = episode % draw_freq == 0,#draw_freq-1,
                                                               buffer=buffer,
                                                               buffer_count=buffer_count,
                                                               )
+            if success:
+                success_rate = (1-success_rate_decay)*success_rate +success_rate_decay
+            else:
+                success_rate = (1-success_rate_decay)*success_rate
+            
             if episode % pfreq==0:
                 print(f'episode {episode}/{self.config["train_n_episodes"]} rewards: {np.sum(rewards_ep,axis=1)}')
             if episode % save_freq == 0:
                 file = open(os.path.join(log_dir,f'res{episode}.pickle'), 'wb')
                 pickle.dump({"rewards":rewards_ep,"episode":episode,"n_steps":n_steps_ep},file)
                 file.close()
+            if self.use_wandb and episode % self.log_freq == 0:
+                wandb.log({'succes_rate':success_rate})
             if anim is not None:
                 if self.use_wandb:
                     wandb.log({'animation':wandb.Html(anim.to_jshtml())})
@@ -286,8 +227,45 @@ class ReplayDiscreteGymSupervisor():
     
     def test(self,
              draw=True):
-        anim = None
-        return anim
+        from relative_single_agent import int2act_norot
+        self.agent.Act(self.sim,'Ph',rid=0,
+                        sideblock=0,
+                        sidesup = 1,
+                        bid_sup = 0,
+                        idconsup = 1,
+                        blocktypeid = 0,
+                        side_ori = 0,
+                        draw= False)
+        self.agent.Act(self.sim,'Ph',rid=1,
+                        sideblock=0,
+                        sidesup = 0,
+                        bid_sup = 1,
+                        idconsup = 1,
+                        blocktypeid = 1,
+                        side_ori = 4,
+                        draw= False)
+        setup = copy.deepcopy(self.sim)
+        mask = self.agent.generate_mask(self.sim,0)
+        #self.sim.setup_anim()
+        #self.sim.add_frame()
+        while mask.any():
+            
+            actionids,= np.nonzero(mask)
+            action,action_params = int2act_norot(actionids[0],self.sim.graph.n_blocks,
+                                                 self.n_robots,
+                                                 self.agent.n_side_oriented,
+                                                 self.agent.n_side_oriented_sup,
+                                                 self.agent.last_only,
+                                                 self.agent.max_blocks,
+                                                 self.agent.action_choice)
+            self.agent.Act(self.sim,action,**action_params,draw=True)
+            self.sim.draw_state_debug()
+            mask[actionids[0]]=False
+            self.sim =copy.deepcopy(setup)
+            #self.sim.setup_anim()
+            #self.sim.add_frame()
+        #anim = self.sim.animate()
+        return None
 
 if __name__ == '__main__':
     print("Start test gym")
@@ -310,7 +288,7 @@ if __name__ == '__main__':
     #         'opt_tau': 1e-5,
     #         'opt_weight_decay':1e-3,
     #         'opt_exploration_factor':0.1}
-    config = {'train_n_episodes':100000,
+    config = {'train_n_episodes':6000,
             'train_l_buffer':200,
             'ep_batch_size':32,
             'ep_use_mask':True,
@@ -320,6 +298,7 @@ if __name__ == '__main__':
             'SEnc_n_channels':32,
             'SEnc_n_internal_layer':4,
             'SEnc_stride':1,
+            'SEnc_order_insensitive':False,
             'SAC_n_fc_layer':2,
             'SAC_n_neurons':64,
             'SAC_batch_norm':True,
@@ -338,11 +317,27 @@ if __name__ == '__main__':
             'opt_Q_reduction': 'min',
             'V_optimistic':False,
             }
-    
-    gym = ReplayDiscreteGymSupervisor(config,use_wandb=True,agent_type = SACSupervisorSparse,actions=['Ph','L'],random_targets='fixed',block_type=[hexagon])
+    hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
+    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7) 
+    linkl = Block([[0,0,0],[0,1,1],[1,0,0],[0,1,0],[0,0,1],[-1,1,1]],muc=0.7) 
+    linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.7)
+    target = Block([[0,0,1],[1,0,1]])
+    gym = ReplayDiscreteGymSupervisor(config,
+              agent_type=SACSupervisorSparse,
+              use_wandb=True,
+              actions= ['Ph','L'],
+              block_type=[hexagon],
+              random_targets='random_flat',
+              targets_loc=[[5,5],[20,0]],
+              n_robots=2,
+              max_blocks = 20,
+              targets=[target]*2,
+              reward_function=reward_link3,
+              max_interfaces = 50,
+              log_freq = 10,
+              maxs = [10,10])
     t0 = time.perf_counter()
-    anim = gym.training(max_steps = 20, draw_freq = 50,pfreq =10)
-    #anim = gym.test()
+    anim = gym.training(max_steps = 20, draw_freq = 100,pfreq =10)
     #gr.save_anim(anim,os.path.join(".", f"test_graph"),ext='html')
     t1 = time.perf_counter()
     print(f"time spent: {t1-t0}s")

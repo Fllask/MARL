@@ -612,6 +612,8 @@ class SACDenseOptimizer():
             #wandb.watch(self.model)
         self.step+=1
         return l_p.detach().cpu().numpy()
+
+
 class PolNetSparse(nn.Module):
     def __init__(self,
                  maxs_grid,
@@ -636,7 +638,15 @@ class PolNetSparse(nn.Module):
         self.name = name
         self.use_wandb=use_wandb
         self.log_freq = log_freq
-        self.state_encoder = StateEncoder(maxs_grid,
+        if config['SEnc_order_insensitive']:
+            self.state_encoder = StateEncoderOE(maxs_grid,
+                                          n_robots,
+                                          n_regions,
+                                          config['agent_last_only'],
+                                          device=device,
+                                          **encoder_args)
+        else:
+            self.state_encoder = StateEncoder(maxs_grid,
                                           max_blocks,
                                           n_robots,
                                           n_regions,
@@ -1509,7 +1519,49 @@ class StateEncoder(nn.Module):
         for conv in self.convinternal:
             rep = F.relu(conv(rep))
         return rep
-
+class StateEncoderOE(nn.Module):
+    def __init__(self,
+                 maxs_grid,
+                 n_robots,
+                 n_regions,
+                 last_only,
+                 n_channels = 32,
+                 n_internal_layer = 2,
+                 stride=1,
+                 device='cpu'):
+        super().__init__()
+        if not last_only:
+            print("Warning, this encoder cannot differentiate between blocks, so last-only option is highly recommended")
+        self.nrob = n_robots
+        self.nreg = n_regions
+        self.convin = nn.Conv2d(12,n_channels,3,stride=1,device=device)
+        self.convinternal = nn.ModuleList([nn.Conv2d(n_channels,n_channels,3,stride=stride,device=device) for i in range(n_internal_layer)])
+        self.device=device
+        dimx = maxs_grid[0]-1
+        dimy = maxs_grid[1]-1
+        for i in range(n_internal_layer):
+            dimx = (dimx-3)//stride+1
+            dimy = (dimy-3)//stride+1
+        assert dimx > 0 and dimy>0, "out dims are negative"
+        self.out_dims = [n_channels,dimx,dimy]
+    def forward(self,grids):
+        sides = torch.tensor(np.array([grid.neighbours[:,:,:,:,0]>-1 for grid in grids]),device=self.device,dtype=torch.float)
+        last_block = torch.tensor(np.array([grid.occ== np.max(grid.occ) for grid in grids]),device=self.device,dtype=torch.float)
+        
+        hold = torch.tensor(np.array([grid.hold for grid in grids]),device=self.device)/self.nrob
+        con = torch.tensor(np.array([grid.connection for grid in grids]),device=self.device)/self.nreg
+        
+        inputs = torch.cat([sides.flatten(-2),last_block,hold,con],3)
+        if torch.any(torch.isnan(inputs)):
+            assert False, 'nans in the input'
+        inputs= inputs.permute(0,3,1,2)
+        #inputs= inputs.permute(0,4,1,2,3)
+        # rep = torch.cat([F.relu(self.convinup(inputs[...,0])),
+        #                  F.relu(self.convindown(inputs[...,1]))],1)
+        rep = F.relu(self.convin(inputs))
+        for conv in self.convinternal:
+            rep = F.relu(conv(rep))
+        return rep
 class ActionDecoder(nn.Module):
     def __init__(self,
                  maxs_grid,

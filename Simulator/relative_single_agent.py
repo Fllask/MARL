@@ -41,7 +41,7 @@ class SupervisorRelative(metaclass=abc.ABCMeta):
                 stable = simulator.check()
                 if not stable:
                     #the robot cannot move from there
-                    simulator.hold(rid,oldbid)
+                    #simulator.hold(rid,oldbid)
                     return False,None,blocktype
             valid,closer = simulator.put_rel(blocktype,sideblock,sidesup,bid_sup,side_ori,blocktypeid=blocktypeid,idconsup = idconsup)
                 
@@ -51,18 +51,18 @@ class SupervisorRelative(metaclass=abc.ABCMeta):
                 if action == 'Pl':
                     stable = simulator.check()
                     if not stable:
-                        simulator.remove(simulator.nbid-1,save=False)
+                        #simulator.remove(simulator.nbid-1,save=False)
                         valid = False
-            if not valid:
-                simulator.hold(rid,oldbid)
+            # if not valid:
+            #     simulator.hold(rid,oldbid)
                             
         elif action == 'L':
             oldbid = simulator.leave(rid)
             if oldbid is not None:
                 stable = simulator.check()
                 valid = stable
-                if not stable:
-                    simulator.hold(rid,oldbid)
+                # if not stable:
+                #     simulator.hold(rid,oldbid)
             else:
                 valid = False
         else:

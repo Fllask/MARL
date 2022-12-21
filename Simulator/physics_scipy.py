@@ -7,15 +7,16 @@ Created on Mon Sep 19 09:55:31 2022
 import time 
 import numpy as np
 from scipy.optimize import linprog 
+from qpsolvers import solve_qp
 from discrete_blocks import discret_block as Block, Grid, switch_direction,grid2real
 
 
 
 class stability_solver_discrete():
     def __init__(self,
-                 Fx_robot = [-100,100],
-                 Fy_robot = [-100,100],
-                 M_robot = [-1000,1000],
+                 Fx_robot = [-1000,1000],
+                 Fy_robot = [-1000,1000],
+                 M_robot = [-10000,10000],
                  n_robots = 2,
                  F_max = 100,
                  ):
@@ -38,7 +39,11 @@ class stability_solver_discrete():
         self.roweqid = np.zeros((0),dtype=int)
         self.rowid = -np.ones((self.nr*6),dtype=int)
         self.xid = -np.ones((self.nr*6),dtype=int)
-        
+        self.xpos = np.zeros((self.nr*6,2))
+        self.cmpos =np.zeros((1,2))#use a padding of 0
+        self.last_res = None
+        self.x_soft=None
+        self.constraints = None
         # self.last_sol = np.zeros(0)
         
     def add_block(self,grid,block,bid,interfaces=None):
@@ -77,7 +82,7 @@ class stability_solver_discrete():
         #take care of the Ffp
         nAeqcorner[0,sup0idx+1]=1
         nAeqcorner[0,sup1idx+1]=0.5
-        nAeqcorner[0,sup2idx+1]=-0.5
+        nAeqcorner[0,sup2idx+1]=0.5
         
         #now the Fy components:
         #Fs
@@ -87,15 +92,15 @@ class stability_solver_discrete():
         
         #Ffp
         nAeqcorner[1,sup0idx+1]=0
-        nAeqcorner[1,sup1idx+1]=np.sqrt(3)/2
-        nAeqcorner[1,sup2idx+1]=-np.sqrt(3)/2
+        nAeqcorner[1,sup1idx+1]=-np.sqrt(3)/2
+        nAeqcorner[1,sup2idx+1]=np.sqrt(3)/2
         
         #compute the postion of each corner:
         pos = side2corners(sup)
         pos0 = pos[sup0idx_s]
         pos1 = pos[sup1idx_s]
         pos2 = pos[sup2idx_s]
-        
+        self.xpos = np.concatenate([self.xpos,np.repeat(pos.reshape(-1,2),3,axis=0)])
         for idxi, posi in zip([sup0idx_s[0],sup1idx_s[0],sup2idx_s[0]],[pos0,pos1,pos2]):
             numberp=len(idxi)
             if numberp==0:
@@ -138,7 +143,9 @@ class stability_solver_discrete():
         #add an index of the row:
         self.roweqid = np.concatenate([self.roweqid,bid*np.ones(3,dtype=int)])
         self.xid = np.concatenate([self.xid,bid*np.ones(ncorners*3,dtype=int)])
-        self.beq = np.concatenate([self.beq, [0,block.mass,block.mass*get_cm(block.parts)[0]]])
+        cmi_pos =get_cm(block.parts)
+        self.cmpos = np.concatenate([self.cmpos,np.expand_dims(cmi_pos,0)])
+        self.beq = np.concatenate([self.beq, [0,block.mass,block.mass*cmi_pos[0]]])
         
         
         
@@ -162,7 +169,7 @@ class stability_solver_discrete():
         
         self.Aeq = np.delete(self.Aeq,np.nonzero(self.roweqid==bid),axis=0)
         self.beq = np.delete(self.beq,np.nonzero(self.roweqid==bid))
-        
+        self.cmpos = np.delete(self.cmpos,bid,axis=0)
         self.A = np.delete(self.A,np.nonzero(self.rowid==bid),axis=0)
         self.b = np.delete(self.b,np.nonzero(self.rowid==bid))
         
@@ -176,26 +183,50 @@ class stability_solver_discrete():
         
         self.roweqid = np.delete(self.roweqid,self.roweqid == bid)
         self.rowid = np.delete(self.rowid,self.rowid == bid)
+        self.xpos = np.delete(self.xpos,col2del,axis=0)
         self.xid = np.delete(self.xid,col2del)
         
-    def hold_block(self,bid,rid):
-        row = np.nonzero(self.roweqid==bid)
-        if row[0].shape[0] > 0:
-            row0 = row[0][0]
+    def hold_block(self,bid,rid,hold_pos_rel=[0,0]):
+        
+        hold_pos_abs = self.cmpos[bid]+hold_pos_rel
+        hold_pos_abs= np.squeeze(hold_pos_abs)
+        row, = np.nonzero(self.roweqid==bid)
+        if row.shape[0] > 0:
+            row0 = row[0]
         else:
             return False
         self.Aeq[row0:row0+3,rid*6:(rid+1)*6]= [[1,-1,0,0,0,0],
                                                [0,0,1,-1,0,0],
-                                               [0,0,0,0,1,-1]]
+                                               [hold_pos_abs[1],-hold_pos_abs[1],hold_pos_abs[0],-hold_pos_abs[0],1,-1]]
         return True
     def leave_block(self,rid):
         self.Aeq[:,rid*6:(rid+1)*6]=0
         
     # def bid2boolarr(self,bid,idx='row'):
     #     return np.nonzero(self.block==bid)
-    def solve(self):
-        res = linprog(self.c,self.A,self.b,self.Aeq,self.beq)
-        return res
+    def solve(self,method='highs',soft =False):
+        if soft:
+            # csoft = np.concatenate([self.c,1000*np.ones(self.Aeq.shape[0])])
+            # Asoft = np.hstack([self.A, np.zeros((self.A.shape[0],self.Aeq.shape[0]))])
+            # bsoft = self.b
+            # Aeqsoft = np.hstack([self.Aeq, np.diag(np.ones(self.Aeq.shape[0]))])
+            # beqsoft = self.beq
+            # res = linprog(csoft,Asoft,bsoft,Aeqsoft,beqsoft)
+            
+            P = np.diag(np.concatenate([1e-5*self.c,1e-5*self.c]))
+            q = np.concatenate([self.c,self.c*1000000])
+            G = np.hstack([self.A,np.zeros(self.A.shape)])
+            A = np.hstack([self.Aeq,-self.Aeq])
+            x_soft = solve_qp(P,q,A=A,b=self.beq,G=G,h=self.b,lb=np.zeros(self.c.shape[0]*2),solver='quadprog',verbose=True)
+            if x_soft is not None:
+                self.x_soft=x_soft[:x_soft.shape[0]//2]
+                self.constraints = x_soft[x_soft.shape[0]//2:]
+                return self.constraints
+        else:
+            res = linprog(self.c,self.A,self.b,self.Aeq,self.beq,method=method)
+            self.last_res = res
+            
+            return res
     def reset(self):
         self.A = np.diag(np.ones(self.nr*6))
         self.b = self.b[:self.nr*6]
@@ -219,7 +250,7 @@ class stability_solver_discrete():
 #     coefs[sides0idxs*3+2,:]=0
 #     return coefs
     
-def side2corners(sides,security_factor=0.1):
+def side2corners(sides,security_factor=0.2):
     #return the real coordinates of the two corners of the sides
     #note that p1(side)==p1(switch direction(side))
     
@@ -232,12 +263,12 @@ def side2corners(sides,security_factor=0.1):
     corners[upsides[:,3]==0,0,:] = corners[upsides[:,3]==0,0,:]+[security_factor/2,0]
     corners[upsides[:,3]==0,1,:] = corners[upsides[:,3]==0,1,:]+[1-security_factor/2,0]
     
-    corners[upsides[:,3]==1,0,:] = corners[upsides[:,3]==1,0,:]+[1-security_factor/4,np.sqrt(3)/2*security_factor]
-    corners[upsides[:,3]==1,1,:] = corners[upsides[:,3]==1,1,:]+[0.5+security_factor/4,np.sqrt(3)/2*(1-security_factor)]
+    corners[upsides[:,3]==1,0,:] = corners[upsides[:,3]==1,0,:]+[1-security_factor/4,security_factor*np.sqrt(3)/4]
+    corners[upsides[:,3]==1,1,:] = corners[upsides[:,3]==1,1,:]+[0.5+security_factor/4,np.sqrt(3)/2-security_factor*np.sqrt(3)/4]
     
     
-    corners[upsides[:,3]==2,0,:] = corners[upsides[:,3]==2,0,:]+[0.5-security_factor/4,np.sqrt(3)/2*(1-security_factor)]
-    corners[upsides[:,3]==2,1,:] = corners[upsides[:,3]==2,1,:]+[security_factor/4,np.sqrt(3)/2*security_factor]
+    corners[upsides[:,3]==2,0,:] = corners[upsides[:,3]==2,0,:]+[0.5-security_factor/4,np.sqrt(3)/2*(1-security_factor/2)]
+    corners[upsides[:,3]==2,1,:] = corners[upsides[:,3]==2,1,:]+[security_factor/4,np.sqrt(3)/4*security_factor]
     return corners
 
 def get_cm(parts):

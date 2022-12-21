@@ -24,6 +24,10 @@ class AgentSimultanous(metaclass=abc.ABCMeta):
         self.n_robots = n_robots
         self.block_choices = block_choices
         self.use_wandb=use_wandb
+    def prepare_action(self,simulator,action):
+        if action in  {'P','L'}:
+            simulator.leave(self.rid)
+            
     def act(self,simulator,action,
             sideblock=None,
             sidesup = None,
@@ -38,8 +42,6 @@ class AgentSimultanous(metaclass=abc.ABCMeta):
             blocktype= self.block_choices[blocktypeid]
         else:
             blocktype = None
-        if action == 'L':
-            oldbid = simulator.leave(self.rid)
         if action == 'P':
             oldbid = simulator.leave(self.rid)
             if oldbid is not None:
@@ -50,7 +52,7 @@ class AgentSimultanous(metaclass=abc.ABCMeta):
                 
             if valid:
                 simulator.hold(self.rid,simulator.nbid-1)
-        if action == 'S':
+        if action in {'L','S'}:
             return True,None,None
         return valid,closer,blocktype
     @abc.abstractmethod
@@ -248,3 +250,46 @@ def int2actsim_norot(actionid,n_blocks,n_side_b,n_side_sup,maxblocks,n_grounds):
                              'idconsup':None,#always place the block on the second target
                               }
     return action,action_params
+def reward_simultaneous1(action, valid, closer, success,failure):
+    reward = 0
+    if failure:
+        return -1
+    if success:
+        reward+=1
+    if action == 'P':
+        if closer == 1:
+            return reward+0.4
+        else:
+            return reward
+    if action == 'L':
+        return reward - 0.1
+    if action == 'S':
+        return reward -0.1
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    

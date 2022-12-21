@@ -7,6 +7,7 @@ Created on Wed Oct 12 13:12:51 2022
 
 from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon,Circle,FancyArrowPatch
+
 import numpy as np
 
 from discrete_blocks_norot import discret_block_norot as Block
@@ -14,7 +15,7 @@ from discrete_blocks_norot import Grid, Graph,FullGraph
 
 from matplotlib import animation
 from IPython.display import HTML
-
+from physics_scipy import side2corners,get_cm
 
 s3 =np.sqrt(3)
 base = np.array([[1,0.5],[0,s3/2]])
@@ -54,37 +55,41 @@ def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,linewidt
     ax.axis('off')
     # ax.set_yticklabels(np.arange(-xlim[0],np.floor((ylim[1]-ylim[0])/np.sqrt(3))-xlim[0]+1))
     return fig,ax
-def draw_action(ax,rid,action,blocktype,animated=False,**action_args):
+def draw_action(ax,rid,action,blocktype,animated=False,multi=False,**action_args):
     action_args['rid']=rid
-    if action == 'Ph':
-        art = draw_put(ax,blocktype,hold=True,**action_args,animated=animated)
+    if action in  ['Ph','P']:
+        art = draw_put(ax,blocktype,hold=True,**action_args,animated=animated,multi=multi)
     elif action == 'Pl':
-        art=draw_put(ax,blocktype,hold=False,**action_args,animated=animated)
+        art=draw_put(ax,blocktype,hold=False,**action_args,animated=animated,multi=multi)
     elif action == 'H':
-        art=draw_hold(ax,**action_args,animated=animated)
+        art=draw_hold(ax,**action_args,animated=animated,multi=multi)
     elif action == 'R':
-        art=draw_remove(ax,**action_args,animated=animated)
+        art=draw_remove(ax,**action_args,animated=animated,multi=multi)
     elif action == 'L':
-        art=draw_leave(ax,**action_args,animated=animated)
+        art=draw_leave(ax,**action_args,animated=animated,multi=multi)
+    elif action == 'S':
+        art= draw_stay(ax,**action_args,animated = animated,multi=multi)
     return art
-def draw_action_rel(ax,rid,action,blocktype,grid,animated=False,**action_args):
+def draw_action_rel(ax,rid,action,blocktype,grid,animated=False,multi=False,**action_args):
     action_args['rid']=rid
-    if action == 'Ph':
+    if action in  ['Ph','P']:
         if action_args.get('bid_sup') is None:
             action_args['bid_sup'] = np.max(grid.occ)
         grid.connect(blocktype, None, action_args['sideblock'], action_args['sidesup'],action_args['bid_sup'],action_args['side_ori'],idcon=action_args['idconsup'])
-        art = draw_put_rel(ax,blocktype,hold=True,**action_args,animated=animated)
+        art = draw_put_rel(ax,blocktype,hold=True,**action_args,animated=animated,multi=multi)
     elif action == 'Pl':
         if action_args.get('bid_sup') is None:
             action_args['bid_sup'] = np.max(grid.occ)
         grid.connect(blocktype, None, action_args['sideblock'], action_args['sidesup'],action_args['bid_sup'],idcon=action_args['idconsup'])
-        art=draw_put_rel(ax,blocktype,hold=False,**action_args,animated=animated)
+        art=draw_put_rel(ax,blocktype,hold=False,**action_args,animated=animated,multi=multi)
     elif action == 'H':
-        art=draw_hold(ax,**action_args,animated=animated)
+        art=draw_hold(ax,**action_args,animated=animated,multi=multi)
     elif action == 'R':
-        art=draw_remove(ax,**action_args,animated=animated)
+        art=draw_remove(ax,**action_args,animated=animated,multi=multi)
     elif action == 'L':
-        art=draw_leave(ax,**action_args,animated=animated)
+        art=draw_leave(ax,**action_args,animated=animated,multi=multi)
+    elif action == 'S':
+        art= draw_stay(ax,**action_args,animated = animated,multi=multi)
     return art
 def draw_put_rel(ax,
                  blocktype,
@@ -96,8 +101,12 @@ def draw_put_rel(ax,
                  blocktypeid = None,
                  idconsup=None,
                  side_ori=None,
-                 animated=False):
-    arts = draw_block(ax, blocktype, color=plt.cm.Set1(rid),animated=animated)
+                 animated=False,
+                 multi=False):
+    if multi:
+        arts = draw_block(ax, blocktype, color=plt.cm.Set2(rid),alpha=0.5,animated=animated)
+    else:
+        arts = draw_block(ax, blocktype, color=plt.cm.Set2(rid),animated=animated)
     if hold:
         #the block was already moved by draw_block
         parts = blocktype.parts
@@ -105,8 +114,8 @@ def draw_put_rel(ax,
         for side in sides:
             arts+= draw_side(ax, side,color='k',linewidth=0.5,animated=animated)
     return arts
-def draw_put(ax,blocktype,rid,hold,pos,ori,blocktypeid,animated=False):
-    arts = draw_block(ax, blocktype, pos, ori, color=plt.cm.Set1(rid),animated=animated)
+def draw_put(ax,blocktype,rid,hold,pos,ori,blocktypeid,animated=False,multi=False):
+    arts = draw_block(ax, blocktype, pos, ori, color=plt.cm.Set2(rid),animated=animated)
     if hold:
         #the block was already moved by draw_block
         parts = blocktype.parts
@@ -115,36 +124,42 @@ def draw_put(ax,blocktype,rid,hold,pos,ori,blocktypeid,animated=False):
             arts+= draw_side(ax, side,color='k',animated=animated)
     return arts
         
-def draw_hold(ax,rid,bid=None,pos=None,ori=None,animated=False):
+def draw_hold(ax,rid,bid=None,pos=None,ori=None,animated=False,multi=False):
     if bid is None:
-        arts = fill_triangle(ax, pos+ori%2, color=plt.cm.Set1(rid),animated=animated)
+        arts = fill_triangle(ax, pos+ori%2, color=plt.cm.Set2(rid),animated=animated)
         side = pos+ori//2
         arts+= draw_side(ax, side,color='k',animated=animated)
     else:
-        art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to grab block {bid}",color = plt.cm.Set1(rid),animated=animated)
+        art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to grab block {bid}",color = plt.cm.Set2(rid),animated=animated)
         arts = [art]
     return arts
-def draw_remove(ax,rid,bid=None, pos=None,ori=None,animated=False):
+def draw_remove(ax,rid,bid=None, pos=None,ori=None,animated=False,multi=False):
     if bid is None:
         arts = fill_triangle(ax, pos+ori%2, color='k',animated=animated)
         side = pos+ori//2
-        arts+= draw_side(ax, side,color=plt.cm.Set1(rid),linewidth=0.5,animated=animated)
+        if multi:
+            arts+= draw_side(ax, side,color=plt.cm.Set2(rid),linewidth=0.5,alpha = 0.5,animated=animated)
+        else:
+            arts+= draw_side(ax, side,color=plt.cm.Set2(rid),linewidth=0.5,animated=animated)
     else:
-        art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to remove block {bid}",color = plt.cm.Set1(rid),animated=animated)
+        if multi:
+            art = ax.text(0,ax.get_ylim()[1]-1-rid,f"Robot {rid} tried to remove block {bid}",color = plt.cm.Set2(rid),animated=animated)
+        else:
+            art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to remove block {bid}",color = plt.cm.Set2(rid),animated=animated)
         arts = [art]
     return arts
-def draw_leave(ax,rid,animated=False):
-    art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to leave",color = plt.cm.Set1(rid),animated=animated)
+def draw_leave(ax,rid,animated=False,multi=False):
+    if multi:
+        art = ax.text(0,ax.get_ylim()[1]-1-rid,f"Robot {rid} tried to leave",color = plt.cm.Set2(rid),animated=animated)
+    else:
+        art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to leave",color = plt.cm.Set2(rid),animated=animated)
     return [art]
-# def draw_block(ax,block,label_corners = False,**kwarg):
-#     triangle = np.array([[-0.5,np.sqrt(3)/2],[0,-0.25+np.sqrt(3)/2],[0.5,0.25-np.sqrt(3)/2]])
-#     for p in block.parts:
-#         if p[0]%2==0:
-#             art = Polygon(p+triangle)
-#             ax.add_artist(art)
-#         else:
-#             art = Polygon(p-triangle)
-#             ax.add_artist(art)
+def draw_stay(ax,rid,animated=False,multi=False):
+    if multi:
+        art = ax.text(0,ax.get_ylim()[1]-1-rid,f"Robot {rid} stayed in placed",color = plt.cm.Set2(rid),animated=animated)
+    else:
+        art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} stayed in placed",color = plt.cm.Set2(rid),animated=animated)
+    return [art]
 def rad(alpha):
     return alpha*180/np.pi
 
@@ -177,13 +192,154 @@ def draw_side(ax,coord,color=None,animated=False,linewidth=2):
         p2 = coord[:2]+[coord[2],(-2*coord[2]+1)]
     if color is None:
         if coord[2]==1:
-            color = 'y'
-        else:
-            color = 'g'
+            color = plt.cm.tab10(coord[3]/10)
     p1xy = base @ p1
     p2xy = base @ p2
+    #corners = side2corners(np.expand_dims(coord[:-1],0),security_factor=0.5)
+    
     art = ax.plot([p1xy[0],p2xy[0]],[p1xy[1],p2xy[1]],color=color,alpha=1,linewidth=linewidth,animated=animated)
+    
+    
+    #art += [ax.scatter(corners[0,:,0],corners[0,:,1],color=color)]
+    
     return art
+def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,animated=False,solve=True):
+    if solve:
+        constraints = force_bag.solve(soft=True)
+    if force_bag.x_soft is None:
+        return []
+    blocksid = force_bag.xid
+    n_blocks=np.max(blocksid)
+    start_idx = force_bag.nr*6
+    # draw the external forces
+    x = force_bag.x_soft
+    posx = force_bag.xpos
+        
+    faileds, = np.nonzero(force_bag.constraints > 1e-3)
+    arts = []
+    
+    if faileds.shape[0]>0:
+        constraints = force_bag.constraints
+        for failed in faileds:
+            if force_bag.xid[failed]==-1:
+                continue
+            f_stick = constraints[failed]
+            blocks = np.unique(force_bag.roweqid[force_bag.Aeq[:,failed]!=0])
+            for block in blocks:
+                Aeq_block=force_bag.Aeq[force_bag.roweqid==block]
+                pos =posx[failed]
+                scale = 1/ np.max(np.append(x[~np.all(Aeq_block==0,axis=0)],force_bag.beq[force_bag.roweqid==block][1]))/2
+                arts+=[plt.arrow(pos[0],
+                                  pos[1],
+                                  -Aeq_block[0,failed]*f_stick*scale,
+                                  -Aeq_block[1,failed]*f_stick*scale,
+                                  color='r',
+                                  width=0.1,
+                                  animated= animated,
+                                  zorder=100)]
+    #     bids_failed = np.unique(blocksid[faileds])
+    #     for bid in bids_failed:
+    #         mov = -constraints[force_bag.roweqid==bid]
+    #         cm = force_bag.cmpos[bid]
+    #         n = np.sqrt(mov[0]*mov[0]+mov[1]*mov[1])*2
+    #         arts+=[ax.arrow(cm[0],cm[1],
+    #                         mov[0]/n,mov[1]/n,
+    #                         color='r',
+    #                         width=0.2,
+    #                         animated= animated,
+    #                         zorder=99)]
+
+    #         ax.add_artist(arts[-1])
+            # if abs(mov[2])>1e-6:
+            #     arts+=ax.plot(cm[0],cm[1],marker=r'$\circlearrowleft$',c='r',zorder=98,ms=50,animated = animated)
+            # if abs(mov[2])<-1e-6:
+            #     arts+=ax.plot(cm[0],cm[1],marker=r'$\circlearrowright$',c='r',zorder=98,ms=50,animated = animated)
+    #draw the forces from the robots:
+    if rids is None:
+        rids = np.arange(force_bag.nr)
+    for r in rids:
+        idxr = r*6
+        bid_held = np.unique(force_bag.roweqid[force_bag.Aeq[:,idxr]==1])
+        if len(bid_held>0):
+            fr_x = x[idxr]-x[idxr+1]
+            fr_y = x[idxr+2]-x[idxr+3]
+            Mr = x[idxr+4]-x[idxr+5]
+            cm = force_bag.cmpos[bid_held[0]]
+            f2 = fr_x*fr_x+fr_y*fr_y
+            
+            if uniform_scale is None:
+                scale = 1/(2*np.max(
+                    np.append(x[~np.all(force_bag.Aeq[force_bag.roweqid==bid_held]==0,axis=0)],
+                              force_bag.beq[force_bag.roweqid==bid_held][1])))
+            else:
+                scale = uniform_scale
+                
+            if f2 > 1e-6:
+                arts+=[ax.arrow(cm[0], cm[1],fr_x*scale,fr_y*scale,
+                                            color=plt.cm.Set2(r),
+                                            width=0.05,
+                                            animated= animated,
+                                            zorder=100)]
+            if abs(Mr) > 1e-6:
+                arts+=[ax.arrow(cm[0]+0.5, cm[1],0,Mr*scale,
+                                            color=plt.cm.Set2(r),
+                                            width=0.05,
+                                            animated= animated,
+                                            zorder=100)]
+                arts+=[ax.arrow(cm[0]-0.5, cm[1],0,-Mr*scale,
+                                            color=plt.cm.Set2(r),
+                                            width=0.05,
+                                            animated= animated,
+                                            zorder=100)]
+    if bids is None:
+        bids = np.arange(1,n_blocks+1)
+    for i in bids:
+        Aeq_block = force_bag.Aeq[force_bag.roweqid==i]
+        if uniform_scale is None:
+            x_blocks = x[~np.all(Aeq_block==0,axis=0)]
+            scale = 1/2/np.max(np.append(x_blocks,force_bag.beq[force_bag.roweqid==i][1]))
+        else:
+            scale = uniform_scale
+        #draw the weight
+        cm = force_bag.cmpos[i]
+        f_g = -force_bag.beq[force_bag.roweqid==i][:2]
+        
+        arts+=[ax.arrow(cm[0],cm[1],f_g[0]*scale,f_g[1]*scale,
+                                    color=plt.cm.Pastel1(i%10),
+                                    width=0.05,
+                                    animated= animated,
+                                    zorder=100)]
+        
+        
+        for idxx in range(start_idx,x.shape[0],6):
+            #compute the total support force
+            fs = x[idxx]+x[idxx+3]
+            #compute the combination of the locations
+            if not np.all(Aeq_block[:,idxx]==0) and fs > 1e-6:
+                pos = (x[idxx]*posx[idxx]+x[idxx+3]*posx[idxx+3])/fs
+                arts+=[plt.arrow(pos[0],
+                                  pos[1],
+                                  Aeq_block[0,idxx]*fs*scale,
+                                  Aeq_block[1,idxx]*fs*scale,
+                                  color=plt.cm.Pastel1(i%10),
+                                  width=0.05,
+                                  animated= animated,
+                                  zorder=100)]
+                #comput the friction forces
+                ff = x[idxx+1]-x[idxx+2]+x[idxx+4]-x[idxx+5]
+                if abs(ff) > 1e-6:
+                    arts+=[ax.arrow(pos[0],
+                                     pos[1],
+                                     Aeq_block[0,idxx+1]*ff*scale,
+                                     Aeq_block[1,idxx+1]*ff*scale,
+                                     color=plt.cm.Pastel1(i%10),
+                                     width=0.05,
+                                     animated= animated,
+                                     zorder=100)]
+                    
+                
+    #[ax.add_artist(a) for a in arts]
+    return arts
 def add_graph(ax,graph,animated=False,connectivity = 'sparse'):
     arts = []
     if connectivity == 'sparse':
@@ -271,11 +427,13 @@ def fill_grid(ax,
               grid,
               draw_neigh =False,
               use_con=False,
+              use_forces=True,
               animated=False,
               draw_hold = True,
               ground_color='darkslategrey',
               graph = None,
-              connectivity = None):
+              connectivity = None,
+              forces_bag=None):
     ids = np.unique(grid.occ)
     arts = []
     if animated:
@@ -287,18 +445,30 @@ def fill_grid(ax,
                 arts += fill_triangle(ax, coords.T,color=ground_color,animated=animated)
             else:
                 coords = np.array(np.where(grid.occ==i))
-                if grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 0:
-                    color = plt.cm.Pastel2(0)
-                elif grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 1:
-                    color = plt.cm.Pastel2(1)
-                else:
-                    color = plt.cm.Pastel2(3)
+                if use_con:
+                    if grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 0:
+                        color = plt.cm.Pastel2(0)
+                    elif grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 1:
+                        color = plt.cm.Pastel2(1)
+                    else:
+                        color = plt.cm.Pastel2(3)
+                if use_forces:
+                    c = forces_bag.solve(soft=True)
+                    if c is not None:
+                        x = forces_bag.x_soft[:forces_bag.Aeq.shape[1]]
+                        val = np.max(np.append(x[~np.all(forces_bag.Aeq[forces_bag.roweqid==i]==0,axis=0)],forces_bag.beq[forces_bag.roweqid==i][1]))
+                        color = plt.cm.plasma(val/np.min(np.abs(forces_bag.b[:forces_bag.nr*6])))
+                    else:
+                        color=plt.cm.plasma(np.nan)
                 arts +=fill_triangle(ax, coords.T,color=color,animated=animated)
             
         coords=np.nonzero(grid.neighbours!=-1)
         coords = np.array(coords)
         for i in range(coords.shape[1]):
-            arts+=draw_side(ax,coords[:,i],color = 'xkcd:beige',animated=animated)
+            if draw_neigh:
+                arts+=draw_side(ax,coords[:,i],animated=animated)
+            else:
+                arts+=draw_side(ax,coords[:,i],color = 'k',animated=animated)
         if draw_hold:
             for i in np.unique(grid.hold):
                 if i ==-1:
@@ -307,7 +477,7 @@ def fill_grid(ax,
                 coords = np.array(coords).T
                 coords = np.concatenate([np.tile(coords,(3,1)),np.repeat(np.arange(3),coords.shape[0])[...,None]],axis=1)
                 for coord in coords:
-                    arts+=draw_side(ax, coord,color=plt.cm.Set1(i),animated=animated)
+                    arts+=draw_side(ax, coord,color=plt.cm.Set2(i),animated=animated)
     else:
             
         for i in ids:
@@ -341,15 +511,17 @@ def fill_grid(ax,
                 coords = np.array(coords).T
                 coords = np.concatenate([np.tile(coords,(3,1)),np.repeat(np.arange(3),coords.shape[0])[...,None]],axis=1)
                 for coord in coords:
-                    arts+=draw_side(ax, coord,color=plt.cm.Set1(i),animated=animated)
+                    arts+=draw_side(ax, coord,color=plt.cm.Set2(i),animated=animated)
     if graph is not None:
         arts+= add_graph(ax, graph,animated = animated,connectivity=connectivity)
+    if forces_bag is not None:
+        arts+=draw_forces(ax,grid,forces_bag,uniform_scale=None,solve=False,animated=animated)
     return arts
 def animate(fig,arts_list,sperframe= 0.1):
     ani = animation.ArtistAnimation(fig, arts_list, interval=sperframe*1000, blit=True)
     #HTML(ani.to_jshtml())
     return ani
-def draw_block(ax,block, pos=None,ori=None,draw_neigh=True,highlight_ref = False,animated=False, **colorkw):
+def draw_block(ax,block, pos=None,ori=None,draw_neigh=False,highlight_ref = False,animated=False, **colorkw):
     if ori is not None:
         block.turn(ori)
     if pos is not None:
@@ -401,8 +573,9 @@ if __name__ == "__main__":
     grid.put(hinge,[4,3],5)
     grid.put(linkl,[5,2],6)
     grid.put(hinge,[7,0],7)
-    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=True,h=10,linewidth=0.3)
-    draw_block(ax, hinge,[4,0],highlight_ref=True,draw_neigh=True)
+    fig,ax = draw_grid(maxs,steps=1,color='k',label_points=False,h=10,linewidth=0.3)
+    # draw_block(ax, hinge,[4,0],highlight_ref=True,draw_neigh=True,alpha=0.5,color=plt.cm.Set2(0))
+    # draw_block(ax, hinge,[4,0],highlight_ref=True,draw_neigh=True,alpha=0.5,color=plt.cm.Set2(1))
     fill_grid(ax,grid,draw_neigh=True,animated=True,connectivity = 'sparse')
     plt.show()
     print("End test")
