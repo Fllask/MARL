@@ -63,14 +63,11 @@ class DiscreteSimulator():
         valid, closer,interfaces = self.grid.put(block, pos, self.nbid)
         
         if valid:
-            self.graph.add_block(self.nbid,blocktypeid, pos)
-            self.fullgraph.add_block(self.nbid, blocktypeid, pos)
-            for side1,interface in enumerate(interfaces):
+            self.graph.add_block(blocktypeid, pos)
+            for (ori,side1,side2,bid1,bid2,con1,con2) in interfaces:
                 if self.ninterface == self.max_interface:
                     return False,None
-                if interface[0]==-1:
-                    continue
-                self.graph.add_rel(self.nbid,interface[0],side1,interface[1])
+                self.graph.add_rel(bid1,bid2,ori,side1,side2,con1,con2)
                 self.ninterface+=1
             self.ph_mod.add_block(self.grid,block,self.nbid)
             self.nbid+=1
@@ -86,15 +83,14 @@ class DiscreteSimulator():
           
         valid, closer,interfaces = self.grid.connect(block, self.nbid, idsideblock, idsidesup,idblocksup,side_ori,idcon=idconsup)
         if valid:
-            self.graph.add_block(self.nbid, blocktypeid, block.parts[0,:2])
+            self.graph.add_block(blocktypeid, block.parts[0,:2])
             #self.fullgraph.add_block(self.nbid, blocktypeid, block.parts[0,:2], block.rot)
-            for side1,interface in enumerate(interfaces):
-                if self.ninterface == self.max_interface:
+            for (ori,side1,side2,bid1,bid2,con1,con2) in interfaces:
+            
+                valid1 = self.graph.add_rel(bid1,bid2,ori,side1,side2,con1,con2)
+                valid2 = self.graph.add_rel(bid2,bid1,(ori+3)%6,side2,side1,con2,con1)
+                if not (valid1 and valid2):
                     return False,None
-                if interface[0]==-1:
-                    continue
-                self.graph.add_rel(self.nbid,interface[0],side1,interface[1],interface[2])
-                self.ninterface+=1
             self.ph_mod.add_block(self.grid,block,self.nbid)
             self.type_id[self.nbid]=blocktypeid
             self.nbid+=1
@@ -149,6 +145,8 @@ class DiscreteSimulator():
         #self.prev.grid = copy.deepcopy(self.grid)
         self.grid.hold[self.grid.occ==bid]=rid
         exist = self.ph_mod.hold_block(bid, rid)
+        if exist:
+            self.graph.hold(bid, rid)
         return exist
     
     def hold_loc(self,rid,pos,ori):
@@ -507,8 +505,9 @@ def arch_check(sim):
     hexagon = Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7)
     sim.setup_anim()
     sim.add_ground(Block([[0,0,1],[-1,0,0]]),[1,0])
+    sim.add_ground(Block([[0,0,1],[-1,0,0]]),[1,7])
     sim.add_frame()
-    sim.put_rel(hexagon,0,0,0,0,idconsup=0)
+    sim.put_rel(None,0,0,0,0,idconsup=0,blocktypeid=0)
     sim.add_frame()
     valid = True
     n=1
@@ -517,7 +516,7 @@ def arch_check(sim):
     while valid:
         for i in range(h):
             rid=n%nr
-            sim.put_rel(hexagon,0,0,n,4,idconsup=0)
+            sim.put_rel(None,0,0,n,4,idconsup=0,blocktypeid=0)
             sim.leave(rid)
             sim.hold(rid,n+1)
             n+=1
@@ -529,7 +528,7 @@ def arch_check(sim):
         if valid:
             for i in range(h):
                 idr = n%nr
-                sim.put_rel(hexagon,0,0,n,2,idconsup=0)
+                sim.put_rel(hexagon,0,0,n,2,idconsup=0,blocktypeid=0)
                 sim.leave(idr)
                 sim.hold(idr,n+1)
                 n+=1
@@ -546,6 +545,38 @@ def arch_check(sim):
             sim.add_frame()
     anim = sim.animate()
     return anim
+def pyg_graph_test(sim):
+    from geometric_internal_model import create_sparse_graph,build_hetero_GNN,GAT,ReplayBufferSingleAgent
+    from torch_geometric.nn import to_hetero,to_hetero_with_bases
+    agent_params={'action_list': ['Ph','L'],
+                  'sides_sup':np.array([[0,0,0,1,1,1],[1,1,1,1,1,1]]),
+                  'sides_b':np.array([[1,1,1,1,1,1]])}
+    rb = ReplayBufferSingleAgent(5,agent_params)
+    sim.add_ground(Block([[0,0,1]]),[1,0])
+    sim.check()
+    sample_graph = create_sparse_graph(sim,0,['Ph','L'],'cpu',np.array([[0,0,0,1,1,1],[1,1,1,1,1,1]]),np.array([[1,1,1,1,1,1]]))
+    prev_state = copy.deepcopy(sim)
+    sim.put_rel(None,0,0,0,0,idconsup=0,blocktypeid=0)
+    sim.check()
+    rb.push(0,prev_state, 2, sim, 10)
+    prev_state = copy.deepcopy(sim)
+    sim.put_rel(None,0,0,1,4,idconsup=0,blocktypeid=0)
+    sim.check()
+    rb.push(0,prev_state, 3, sim, 6,terminal=True)
+    sim.put_rel(None,0,0,2,4,idconsup=0,blocktypeid=0)
+    sim.put_rel(None,0,0,3,4,idconsup=0,blocktypeid=0)
+    sim.hold(0,4)
+    sim.check()
+    #graph = create_sparse_graph(sim,0,['Ph','L'],'cpu',np.array([[0,0,0,1,1,1],[1,1,1,1,1,1]]),np.array([[1,1,1,1,1,1]]))
+    graphs,*_ = rb.sample(2)
+    config = {'GNN_arch':'GATskip',
+              'GNN_n_layers':5,
+              'GNN_att_head':1,
+              'GNN_hidden_dim':64,
+              'torch_device':'cpu'}
+    model = build_hetero_GNN(config,sample_graph)
+    out = model(graphs.x_dict, graphs.edge_index_dict)#, graph.edge_attr_dict)
+    return graphs,out
 def demo_action_rel(sim,groundid,block_choices=[Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]]),#hexagone
                                                 Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])]):
     sim.setup_anim()
@@ -699,18 +730,19 @@ if __name__ == '__main__':
     maxs = [30,10]
     choices = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7),#hexagone
                Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7)]#link
-    sim = DiscreteSimulator(maxs,1,choices,1,1000,1000)
+    sim = DiscreteSimulator(maxs,1,choices,2,1000,1000)
     time0 = time.perf_counter()
     
     #grid,bid,ani = scenario1(maxs,n_block=200,maxtry=10000,draw=True)
     #ani = demo_action_rel(sim,0)
     #grid,bid,ani = scenario5(maxs,n_block=600,maxtry=2000,mode='hex',draw=True)
-    ani = arch_check(sim)
+    #ani = arch_check(sim)
+    graph,out = pyg_graph_test(sim)
     time1 = time.perf_counter()
     #print(f"time needed to put {bid} blocks: {time1-time0} ")
-    if ani is not None:
-        gr.save_anim(ani,"test scenario")
-    fig,ax = gr.draw_grid(maxs,h=30,label_points=False,color='none')
+    # if ani is not None:
+    #     gr.save_anim(ani,"test scenario")
+    # fig,ax = gr.draw_grid(maxs,h=30,label_points=False,color='none')
     #gr.fill_grid(ax, grid,use_con=True)
     plt.show()
     print("End test simulator")

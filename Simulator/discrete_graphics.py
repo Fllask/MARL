@@ -273,7 +273,6 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,anim
                               force_bag.beq[force_bag.roweqid==bid_held][1])))
             else:
                 scale = uniform_scale
-                
             if f2 > 1e-6:
                 arts+=[ax.arrow(cm[0], cm[1],fr_x*scale,fr_y*scale,
                                             color=plt.cm.Set2(r),
@@ -436,82 +435,51 @@ def fill_grid(ax,
               forces_bag=None):
     ids = np.unique(grid.occ)
     arts = []
-    if animated:
-        for i in ids:
-            if i == -1:
-                continue
-            if i ==0:
-                coords = np.array(np.where(grid.occ==i))
-                arts += fill_triangle(ax, coords.T,color=ground_color,animated=animated)
-            else:
-                coords = np.array(np.where(grid.occ==i))
-                if use_con:
-                    if grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 0:
-                        color = plt.cm.Pastel2(0)
-                    elif grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 1:
-                        color = plt.cm.Pastel2(1)
-                    else:
-                        color = plt.cm.Pastel2(3)
-                if use_forces:
-                    c = forces_bag.solve(soft=True)
-                    if c is not None:
-                        x = forces_bag.x_soft[:forces_bag.Aeq.shape[1]]
-                        val = np.max(np.append(x[~np.all(forces_bag.Aeq[forces_bag.roweqid==i]==0,axis=0)],forces_bag.beq[forces_bag.roweqid==i][1]))
-                        color = plt.cm.plasma(val/np.min(np.abs(forces_bag.b[:forces_bag.nr*6])))
-                    else:
-                        color=plt.cm.plasma(np.nan)
-                arts +=fill_triangle(ax, coords.T,color=color,animated=animated)
-            
-        coords=np.nonzero(grid.neighbours!=-1)
-        coords = np.array(coords)
-        for i in range(coords.shape[1]):
-            if draw_neigh:
-                arts+=draw_side(ax,coords[:,i],animated=animated)
-            else:
-                arts+=draw_side(ax,coords[:,i],color = 'k',animated=animated)
-        if draw_hold:
-            for i in np.unique(grid.hold):
-                if i ==-1:
-                    continue
-                coords=np.nonzero(grid.hold==i)
-                coords = np.array(coords).T
-                coords = np.concatenate([np.tile(coords,(3,1)),np.repeat(np.arange(3),coords.shape[0])[...,None]],axis=1)
-                for coord in coords:
-                    arts+=draw_side(ax, coord,color=plt.cm.Set2(i),animated=animated)
-    else:
-            
-        for i in ids:
-            if i == -1:
-                continue
-            if i ==0:
-                coords = np.array(np.where(grid.occ==i))
-                arts += fill_triangle(ax, coords.T,color=ground_color,animated=animated)
-            else:
-                coords = np.array(np.where(grid.occ==i))
-                if use_con:
-                    if grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 0:
-                        cmap = plt.cm.summer
-                    elif grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 1:
-                        cmap = plt.cm.winter
-                    else:
-                        cmap = plt.cm.autumn
-                    arts +=fill_triangle(ax, coords.T,color=cmap(i/np.max(ids)),animated=animated)
+    for i in ids:
+        if i == -1:
+            continue
+        if i ==0:
+            coords = np.array(np.where(grid.occ==i))
+            arts += fill_triangle(ax, coords.T,color=ground_color,animated=animated)
+        else:
+            coords = np.array(np.where(grid.occ==i))
+            if use_con:
+                if grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 0:
+                    color = plt.cm.Pastel2(0)
+                elif grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 1:
+                    color = plt.cm.Pastel2(1)
                 else:
-                    arts +=fill_triangle(ax, coords.T,color=plt.cm.turbo(i/np.max(ids)),animated=animated)
+                    color = plt.cm.Pastel2(3)
+            if use_forces and forces_bag is not None:
+                c = forces_bag.solve(soft=True)
+                if c is not None:
+                    x = forces_bag.x_soft[:forces_bag.Aeq.shape[1]]
+                    val = np.max(np.append(x[~np.all(forces_bag.Aeq[forces_bag.roweqid==i]==0,axis=0)],forces_bag.beq[forces_bag.roweqid==i][1]))
+                    color = plt.cm.plasma(val/np.min(np.abs(forces_bag.b[:forces_bag.nr*6])))
+                else:
+                    color=plt.cm.plasma(np.nan)
+            else:
+                color = plt.cm.turbo(i/len(ids))
+            arts +=fill_triangle(ax, coords.T,color=color,animated=animated)
+        
+    coords=np.nonzero(grid.neighbours[:,:,:,:,1]!=-1)
+    coords = np.array(coords)
+    ids = grid.neighbours[grid.neighbours[:,:,:,:,1]!=-1,1]
+    for i in range(coords.shape[1]):
         if draw_neigh:
-            coords=np.nonzero(grid.neighbours!=-1)
-            coords = np.array(coords)
-            for i in range(coords.shape[1]):
-                arts+=draw_side(ax,coords[:,i])
-        if draw_hold:
-            for i in np.unique(grid.hold):
-                if i ==-1:
-                    continue
-                coords=np.nonzero(grid.hold==i)
-                coords = np.array(coords).T
-                coords = np.concatenate([np.tile(coords,(3,1)),np.repeat(np.arange(3),coords.shape[0])[...,None]],axis=1)
-                for coord in coords:
-                    arts+=draw_side(ax, coord,color=plt.cm.Set2(i),animated=animated)
+            arts+=draw_side(ax,coords[:,i],color = plt.cm.tab10(ids[i]),  animated=animated)
+        else:
+            arts+=draw_side(ax,coords[:,i],color = 'grey',animated=animated)
+    if draw_hold:
+        for i in np.unique(grid.hold):
+            if i ==-1:
+                continue
+            coords=np.nonzero(grid.hold==i)
+            coords = np.array(coords).T
+            coords = np.concatenate([np.tile(coords,(3,1)),np.repeat(np.arange(3),coords.shape[0])[...,None]],axis=1)
+            for coord in coords:
+                arts+=draw_side(ax, coord,color=plt.cm.Set2(i),animated=animated)
+    
     if graph is not None:
         arts+= add_graph(ax, graph,animated = animated,connectivity=connectivity)
     if forces_bag is not None:
@@ -576,6 +544,6 @@ if __name__ == "__main__":
     fig,ax = draw_grid(maxs,steps=1,color='k',label_points=False,h=10,linewidth=0.3)
     # draw_block(ax, hinge,[4,0],highlight_ref=True,draw_neigh=True,alpha=0.5,color=plt.cm.Set2(0))
     # draw_block(ax, hinge,[4,0],highlight_ref=True,draw_neigh=True,alpha=0.5,color=plt.cm.Set2(1))
-    fill_grid(ax,grid,draw_neigh=True,animated=True,connectivity = 'sparse')
+    fill_grid(ax,grid,draw_neigh=False,animated=False,connectivity = 'sparse')
     plt.show()
     print("End test")

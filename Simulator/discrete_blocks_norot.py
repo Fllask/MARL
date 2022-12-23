@@ -12,69 +12,96 @@ class Graph():
                  n_reg,
                  maxblocks,
                  maxinterface,
+                 maxinterface_ground = 12,
                  ):
         self.bt = n_blocktype
         self.n_robot = n_robot
         self.n_nodes = n_reg+maxblocks
         self.mblock = maxblocks
         self.minter = maxinterface
-        self.blocks = np.zeros((4,maxblocks),int)
-        self.grounds = np.zeros((4,n_reg),int)
-        self.robots = np.zeros((4,n_robot),int)
-        self.i_s = np.zeros((self.n_nodes,maxinterface),int)
-        self.i_r = np.zeros((self.n_nodes,maxinterface),int)
-        self.i_a = np.zeros((1,maxinterface),int)
+        self.blocks = np.zeros((maxblocks,4),int)
+        self.grounds = np.zeros((n_reg,4),int)
+        self.robots = np.zeros((n_robot,4),int)
+        self.edges_index_bb = np.zeros((2,maxinterface),int)
+        self.edges_index_bg = np.zeros((2,maxinterface_ground//2),int)
+        self.edges_index_gb = np.zeros((2,maxinterface_ground//2),int)
+        self.i_a_bb = np.zeros((maxinterface,3),int) # side ori, side_b, side_sup
+        self.i_a_bg = np.zeros((maxinterface_ground//2,3),int) # side ori, side_b, side_sup
+        self.i_a_gb = np.zeros((maxinterface_ground//2,3),int) # side ori, side_b, side_sup
         self.n_reg = n_reg
-        self.active_nodes = np.zeros((self.n_nodes),bool)
-        self.active_edges = np.zeros((maxinterface),bool)
+        self.active_grounds = np.zeros((n_reg),bool)
+        self.active_blocks = np.zeros((self.mblock),bool)
+        self.active_edges_bb = np.zeros((maxinterface),bool)
+        self.active_edges_bg = np.zeros((maxinterface_ground//2),bool)
+        self.active_edges_gb = np.zeros((maxinterface_ground//2),bool)
         self.n_ground = 0
         self.n_blocks = 0
-        self.n_interface = 0
-        
+        self.n_interface_bb = 0
+        self.n_interface_bg = 0
+        self.n_interface_gb = 0
         #initialise the robot nodes 
     def add_ground(self,pos):
         #note: it is assumed that all the grounds have are the same block 
         assert self.n_ground < self.n_reg, "Attempt to add more grounds than regions"
-        self.grounds[:2,self.n_ground]=-1
-        self.grounds[2:,self.n_ground]=[pos[0],pos[1]]
-        self.active_nodes[self.n_ground]=True
+        self.grounds[self.n_ground,:2]=-1
+        self.grounds[self.n_ground,2:]=[pos[0],pos[1]]
+        self.active_grounds[self.n_ground]=True
         self.n_ground+=1
-    def add_block(self,bid,blocktypeid,pos):
-        self.blocks[0,bid-1]=blocktypeid
-        self.blocks[1,bid-1]=-1
-        self.blocks[2:,bid-1]=[pos[0],pos[1]]
-        self.active_nodes[self.n_reg+bid-1]=True
+    def add_block(self,blocktypeid,pos):
+        self.blocks[self.n_blocks,1]=blocktypeid
+        self.blocks[self.n_blocks,0]=-1
+        self.blocks[self.n_blocks,2:]=[pos[0],pos[1]]
+        self.active_blocks[self.n_blocks]=True
         self.n_blocks+=1
     def hold(self,bid,rid):
-        self.blocks[1,bid-1]=rid
-    def add_rel(self,bid1,bid2,side1,side2,connection2):
+        self.blocks[bid-1,:]=rid
+    def leave(self,rid):
+        self.blocks[:,0]=-1
+    def add_rel(self,bid1,bid2,ori1,side1,side2,connection1,connection2):
         if bid1 >0:
             if bid2 == 0:
-                self.i_r[bid1-1+self.n_reg,self.n_interface]=1
-                self.i_s[connection2,self.n_interface]=1
-                self.i_a[:,self.n_interface]=side1
+                if self.n_interface_bg == self.edges_index_bg.shape[1]:
+                    return False
+                self.edges_index_bg[0,self.n_interface_bg]=bid1-1
+                self.edges_index_bg[1,self.n_interface_bg]=connection2
+                self.i_a_bg[self.n_interface_bg,:]=[ori1,side1,side2]
+                self.active_edges_bg[self.n_interface_bg]=True
+                self.n_interface_bg+=1
             else:
-                self.i_r[bid1-1+self.n_reg,self.n_interface]=1
-                self.i_s[bid2-1+self.n_reg,self.n_interface]=1
-                self.i_a[:,self.n_interface]=side1
-            self.active_edges[self.n_interface]=True
-            self.n_interface+=1
+                if self.n_interface_bb == self.edges_index_bb.shape[1]:
+                    return False
+                self.edges_index_bb[0,self.n_interface_bb]=bid1-1
+                self.edges_index_bb[1,self.n_interface_bb]=bid2-1
+                self.i_a_bb[self.n_interface_bb,:]=[ori1,side1,side2]
+                self.active_edges_bb[self.n_interface_bb]=True
+                self.n_interface_bb+=1
             
-        if bid2 > 0:
-            self.i_r[bid2-1+self.n_reg,self.n_interface]=1
-            self.i_s[bid1-1+self.n_reg,self.n_interface]=1
-            self.i_a[:,self.n_interface]=side2
-            self.active_edges[self.n_interface]=True
-            self.n_interface+=1
+        else:
+            if bid2>0:
+                if self.n_interface_gb == self.edges_index_gb.shape[1]:
+                    return False
+                self.edges_index_gb[0,self.n_interface_gb]=connection1
+                self.edges_index_gb[1,self.n_interface_gb]=bid2-1
+                self.i_a_gb[self.n_interface_gb,:]=[ori1,side1,side2]
+                self.active_edges_gb[self.n_interface_gb]=True
+                self.n_interface_gb+=1
+                
+            
+        return True
     def remove(self,bid):
         assert bid >0, "cannot remove the ground"
-        self.blocks[:,bid-1]=0
-        self.active_nodes[bid-1]=False
-        interfaces_to_delete = np.nonzero((self.i_r[bid-1+self.n_reg,:])|(self.i_s[bid-1+self.n_reg,:]))
-        self.active_edges[interfaces_to_delete]=False
-        self.i_a[:,interfaces_to_delete]=0
-        self.i_r[:,interfaces_to_delete]=0
-        self.i_s[:,interfaces_to_delete]=0
+        self.blocks[bid-1,:]=0
+        self.active_blocks[bid-1]=False
+        
+        interfaces_to_delete_bb = np.nonzero(np.any(self.edges_index_bb == bid-1,axis=1))
+        interfaces_to_delete_bg = np.nonzero(np.any(self.edges_index_bg == bid-1,axis=1))
+        interfaces_to_delete_gb = np.nonzero(np.any(self.edges_index_gb == bid-1,axis=1))
+        self.active_edges_bb[interfaces_to_delete_bb]=False
+        self.i_a_bb[interfaces_to_delete_bb,:]=0
+        self.active_edges_bg[interfaces_to_delete_bg]=False
+        self.i_a_bg[interfaces_to_delete_bg,:]=0
+        self.active_edges_gb[interfaces_to_delete_gb]=False
+        self.i_a_gb[interfaces_to_delete_gb,:]=0
 class FullGraph():
     def __init__(self,
                  n_blocktype,
@@ -152,17 +179,18 @@ class Grid():
             #if floating or np.any(same_side(block.neigh, np.array(np.where(self.neighbours)).T)):
             if not floating:
                 candidates = switch_direction(block.neigh)
-                interfaces = self.neighbours[candidates[:,0],candidates[:,1],candidates[:,2],candidates[:,3],:]
-                if len(interfaces[interfaces[:,0]!=-1,:])==0:
+                candidates_bid = self.neighbours[candidates[:,0],candidates[:,1],candidates[:,2],candidates[:,3],0]
+                
+                if np.all(candidates_bid==-1):
                     return False,None,None
-                interfaces =np.concatenate([interfaces,
-                                            self.connection[candidates[:,0],candidates[:,1],candidates[:,2]][...,None]],
-                                           axis=1)
-            #if floating or np.any(switch_direction(block.neigh)np.array(np.where(self.neighbours)).T)):
+                
+                
+                #if floating or np.any(switch_direction(block.neigh)np.array(np.where(self.neighbours)).T)):
                 #add the block
+            
             self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=bid
             self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],0]=bid
-            self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],1]=np.arange(len(block.neigh))
+            self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],1]=block.sidesid
             if holder_rid is not None:
                 self.hold[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=holder_rid
             
@@ -183,6 +211,24 @@ class Grid():
             else:
                 #take care of the connectivity of the different regions
                 closer=self.update_dist(block)
+                
+                
+                
+                interfaces_ori = block.neigh[candidates_bid!=-1,2]*3+block.neigh[candidates_bid!=-1,3]
+                interfaces_coord = candidates[candidates_bid!=-1]
+                interfaces_sideid = block.sidesid[candidates_bid!=-1]
+                interfaces_supsideid = self.neighbours[interfaces_coord[:,0],interfaces_coord[:,1],interfaces_coord[:,2],interfaces_coord[:,3],1]
+                interfaces_supbid = self.neighbours[interfaces_coord[:,0],interfaces_coord[:,1],interfaces_coord[:,2],interfaces_coord[:,3],0]
+                interfaces_con = self.connection[interfaces_coord[:,0],interfaces_coord[:,1],interfaces_coord[:,2]]
+                
+                #interface: [ori,side1,side2,bid1,bid2,con1,con2]
+                interfaces = np.array([interfaces_ori,
+                                       interfaces_sideid,
+                                       interfaces_supsideid,
+                                       bid*np.ones(interfaces_coord.shape[0]),
+                                       interfaces_supbid,
+                                       interfaces_con,
+                                       np.min(interfaces_con)*np.ones(interfaces_coord.shape[0])]).T
                 
                 return True,closer,interfaces
 
@@ -274,20 +320,23 @@ class Grid():
                 ori_ar = np.concatenate([ori_ar,ori*np.ones(len(pos),dtype=int)])
         return (pos_ar,ori_ar)
     def connect(self,block,bid,sideid,support_sideid,support_bid,side_ori,holder_rid=None,idcon=None):
+        oriented_neigh = self.neighbours.reshape(self.neighbours.shape[0],self.neighbours.shape[1],6,2)
         
-        supportsides = np.array(np.nonzero((self.neighbours[:,:,:,:,0]==support_bid))).T
+        supportside = np.array(np.nonzero((oriented_neigh[:,:,side_ori-3,0]==support_bid)&
+                                          (oriented_neigh[:,:,side_ori-3,1]==support_sideid))).T
         
-        #select only the sides that have the right orientation
-        supportsides = supportsides[(supportsides[:,2]==1-side_ori//3) & (supportsides[:,3]==side_ori%3)]
-        
+        #select only the sides that have the right orientation        
         if support_bid ==0:
-            supportsides =  supportsides[self.connection[supportsides[:,0],supportsides[:,1],supportsides[:,2]]==idcon,:]
+            supportside =  supportside[self.connection[supportside[:,0],supportside[:,1],1-side_ori//3]==idcon]
         
             
-        if supportsides.shape[0]==0:
+            
+        if supportside.shape[0]==0:
             return False,None,None
-        target = switch_direction(supportsides)
-        block.connect(sideid,target[support_sideid])
+        assert supportside.shape[0]==1, "multiple definition of side"
+        
+        target = switch_direction(np.concatenate([supportside,[[1-side_ori//3,side_ori%3]]],axis=1))
+        block.connect(sideid,target[0])
         if bid is not None:
             if (np.min(block.parts)<0 or
                 np.max(block.parts[:,0])>=self.occ.shape[0]-1 or
@@ -300,17 +349,28 @@ class Grid():
                 #add the block
                 self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=bid
                 self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],0]=bid
-                self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],1]=np.arange(len(block.neigh))
+                self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],1]=block.sidesid
                 if holder_rid is not None:
                     self.hold[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=holder_rid
                 
                 #get the interfaces for the graph
-                pot_support = switch_direction(block.neigh)
-                interfaces = self.neighbours[pot_support[:,0],pot_support[:,1],pot_support[:,2],pot_support[:,3]]
-                #add the connected region to the interfaces:
-                interfaces =np.concatenate([interfaces,
-                                            self.connection[pot_support[:,0],pot_support[:,1],pot_support[:,2]][...,None]],
-                                           axis=1)
+                candidates = switch_direction(block.neigh)
+                candidates_bid = self.neighbours[candidates[:,0],candidates[:,1],candidates[:,2],candidates[:,3],0]
+                interfaces_ori = block.neigh[candidates_bid!=-1,2]*3+block.neigh[candidates_bid!=-1,3]
+                interfaces_coord = candidates[candidates_bid!=-1]
+                interfaces_sideid = block.sidesid[candidates_bid!=-1]
+                interfaces_supsideid = self.neighbours[interfaces_coord[:,0],interfaces_coord[:,1],interfaces_coord[:,2],interfaces_coord[:,3],1]
+                interfaces_supbid = self.neighbours[interfaces_coord[:,0],interfaces_coord[:,1],interfaces_coord[:,2],interfaces_coord[:,3],0]
+                interfaces_con = self.connection[interfaces_coord[:,0],interfaces_coord[:,1],interfaces_coord[:,2]]
+                
+                #interface: [ori,side1,side2,bid1,bid2,con1,con2]
+                interfaces = np.array([interfaces_ori,
+                                       interfaces_sideid,
+                                       interfaces_supsideid,
+                                       bid*np.ones(interfaces_coord.shape[0]),
+                                       interfaces_supbid,
+                                       interfaces_con,
+                                       np.min(interfaces_con)*np.ones(interfaces_coord.shape[0])]).T
                 #take care of the connectivity of the different regions
                 closer = self.update_dist(block)
                     
@@ -384,6 +444,11 @@ class discret_block_norot():
     def __init__(self,parts,density=1,muc=0):
         self.parts = np.array(parts)
         self.neigh = outer_sides(self.parts)
+        orientation_neig = self.neigh[:,2]*3+self.neigh[:,3]
+        
+        self.sidesid = np.zeros(self.neigh.shape[0],dtype=int)
+        for ori in range(6):
+            self.sidesid[orientation_neig==ori]=np.arange(len(self.sidesid[orientation_neig==ori]))
         self.mass = density*self.parts.shape[0]
         self.muc = muc
     def move(self,new_p):
