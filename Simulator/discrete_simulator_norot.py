@@ -72,7 +72,7 @@ class DiscreteSimulator():
             self.ph_mod.add_block(self.grid,block,self.nbid)
             self.nbid+=1
 
-        return valid,closer
+        return valid,closer, interfaces
     def put_rel(self,block,idsideblock,idsidesup,idblocksup,side_ori,blocktypeid=None,idconsup=None):
         if self.nbid == self.max_block:
             return False, None
@@ -94,7 +94,7 @@ class DiscreteSimulator():
             self.ph_mod.add_block(self.grid,block,self.nbid)
             self.type_id[self.nbid]=blocktypeid
             self.nbid+=1
-        return valid,closer
+        return valid,closer,interfaces
     def remove(self,bid,save=True):
         if bid < 1 or  bid >=self.nbid:
             #cannot remove the ground or a block already put way before

@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 import numpy as np
 import time
+import os
 import wandb
 torch.autograd.set_detect_anomaly(True)
 from torch.utils.data import Dataset
@@ -880,6 +881,14 @@ class SACSparseOptimizer():
             #wandb.watch(self.model)
         self.step+=1
         return l_p.detach().cpu().numpy()
+    def save(self,log_dir,name):
+        torch.save(self.pol.state_dict(),os.path.join(log_dir,f'{name}_pol.h5'))
+        [torch.save(self.Qs[i].state_dict(),os.path.join(log_dir,f'{name}_Q_{i}.h5')) for i in range(2)]
+        [torch.save(self.target_Qs[i].state_dict(),os.path.join(log_dir,f'{name}_targetQ_{i}.h5')) for i in range(2)]
+        torch.save(self.alpha,os.path.join(log_dir,f'{name}_alpha.h5'))
+        torch.save(self.opt_alpha.state_dict(),os.path.join(log_dir,f'{name}_opt_alpha.h5'))
+        torch.save(self.opt_pol.state_dict(),os.path.join(log_dir,f'{name}_opt_pol.h5'))
+        [torch.save(self.opt_Q[i].state_dict(),os.path.join(log_dir,f'{name}_opt_Q_{i}.h5')) for i in range(2)]
 class A2CDense(nn.Module):
     def __init__(self,
                  maxs_grid,

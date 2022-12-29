@@ -192,17 +192,17 @@ if __name__ == "__main__":
     fig,ax = plt.subplots(1,1,figsize=(6,6))
     ax.set_xlim([0,11])
     ax.set_ylim([0,11])
-    i = check_intersection(ax)
+    i = check_intersection3(ax)
     #test the slide interface
-    #block1 = Block([[0,0],[3,0],[2,1],[1,1]])
-    #block2 = Block([[0,0],[3,0],[2,1],[1,1]])
+    # block1 = Block([[0,0],[3,0],[2,1],[1,1]])
+    # block2 = Block([[0,0],[3,0],[2,1],[1,1]])
     # block2 = Block([[0,0],[0,1],[2,1],[3,0]])
     # block2.move([0,0],[5,5])
     
     # draw_block(ax,block1,label_corners=False)
-    #i = Slide(block2,block1,1,2)
-    # i.set_x(0.6)
-    # _ = draw_interface(ax,i,100,label_corners=True)
+    # i = Slide(block2,block1,1,2)
+    #i.set_x(0.6)
+   # _ = draw_interface(ax,i,100,label_corners=True)
     #test the hang interface    
     # block1 = Block([[4,4],[5,5]]).expand()
     # block2 = Block([[5.5,3.3],[8.5,5.5]]).expand()

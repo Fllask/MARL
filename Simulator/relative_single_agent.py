@@ -9,6 +9,8 @@ import numpy as np
 import internal_models as im
 import abc     
 import wandb
+import pickle
+import os
 class SupervisorRelative(metaclass=abc.ABCMeta):
     def __init__(self, n_robots, block_choices,config,log_freq=None,use_wandb=False,env='rot'):
         super().__init__()
@@ -30,7 +32,7 @@ class SupervisorRelative(metaclass=abc.ABCMeta):
             side_ori = None,
             draw= False,
             ):
-        valid,closer = None,None
+        valid,closer,interfaces = None,None,None
         if blocktypeid is not None:
             blocktype= self.block_choices[blocktypeid]
         else:
@@ -42,8 +44,8 @@ class SupervisorRelative(metaclass=abc.ABCMeta):
                 if not stable:
                     #the robot cannot move from there
                     #simulator.hold(rid,oldbid)
-                    return False,None,blocktype
-            valid,closer = simulator.put_rel(blocktype,sideblock,sidesup,bid_sup,side_ori,blocktypeid=blocktypeid,idconsup = idconsup)
+                    return False,None,blocktype,None
+            valid,closer,interfaces = simulator.put_rel(blocktype,sideblock,sidesup,bid_sup,side_ori,blocktypeid=blocktypeid,idconsup = idconsup)
                 
             if valid:
                 if action == 'Ph':
@@ -67,7 +69,11 @@ class SupervisorRelative(metaclass=abc.ABCMeta):
                 valid = False
         else:
             assert False,'Unknown action'
-        return valid,closer,blocktype
+        return valid,closer,blocktype,interfaces
+    def save(self,name,path):
+        file = open(os.path.join(path,name+'.pickle'), 'wb')
+        pickle.dump(self,file)
+        file.close()
     @abc.abstractmethod
     def generate_mask(self,state,rid):
         pass
@@ -768,41 +774,8 @@ def generate_mask(state,rid,n_side,last_only,max_blocks,n_robots,action_choices)
 def args2idx(pos,ori,grid_size):
     idx =  (pos[:,0]*grid_size[1]*6+pos[:,1]*6+ori).astype(int)
     return idx
-def reward_link2(action,valid,closer,terminal,fail):
-    #reward specific to the case where the robots need to link two points
 
-    #add a penalty for holding a block
-    hold_penalty = 0.
-    #add a penalty if no block are put
-    slow_penalty = 0.1
-    #add a penatly for forbidden actions
-    forbiden_penalty = 0.9
-    #add the terminal reward
-    terminal_reward = 1
-    #add a cost for each block
-    block_cost = -0.
-    #add a cost for the blocks going away from the target, 
-    #or a reward if the block is going toward the target
-    closer_reward = 0.4
-    
-    #the cost of failing
-    failing_cost = 1
-    
-    reward = 0
-    if fail:
-        return -failing_cost
-    if not valid:
-        return -forbiden_penalty
-    if action in {'H', 'L','R'}:
-        reward=-slow_penalty
-    if action =='Ph':
-        reward-=hold_penalty
-    if action in {'Ph', 'Pl'}:
-        reward += closer_reward*closer-block_cost
-    if terminal:
-        reward += terminal_reward
-    return reward
-def reward_link3(action,valid,closer,terminal,fail):
+def generous_reward(action,valid,closer,terminal,fail,n_sides,**kwargs):
     #reward specific to the case where the robots need to link two points
 
     #add a penalty for holding a block
@@ -838,7 +811,61 @@ def reward_link3(action,valid,closer,terminal,fail):
     if terminal:
         reward += terminal_reward
     return reward
+def punitive_reward(action,valid,closer,terminal,fail,**kwargs):
+    #reward specific to the case where the robots need to link two points
 
+    #add a penalty for holding a block
+    hold_penalty = 0.
+    #add a penalty if no block are put
+    slow_penalty = 0.1
+    #add a penatly for forbidden actions
+    forbiden_penalty = 0.9
+    #add the terminal reward
+    terminal_reward = 1
+    #add a cost for each block
+    block_cost = -0.
+    #add a cost for the blocks going away from the target, 
+    #or a reward if the block is going toward the target
+    closer_reward = 0.4
+    
+    #the cost of failing
+    failing_cost = 1
+    
+    reward = 0
+    if fail:
+        return -failing_cost
+    if not valid:
+        return -forbiden_penalty
+    if action in {'H', 'L','R'}:
+        reward=-slow_penalty
+    if action =='Ph':
+        reward-=hold_penalty
+    if action in {'Ph', 'Pl'}:
+        if closer == 1:
+            reward += closer_reward
+        else:
+            reward -= closer_reward
+        reward-=block_cost
+    if terminal:
+        reward += terminal_reward
+    return reward
+def sparse_reward(action,valid,closer,terminal,fail,**kwargs):
+    #reward specific to the case where the robots need to link two points
+
+    terminal_reward = 1
+    
+    failing_cost = 1
+    
+    reward = 0
+    if fail:
+        return -failing_cost
+    if terminal:
+        reward += terminal_reward
+    return reward
+def n_side_reward(action,valid,closer,terminal,fail,**kwargs):
+    assert False, 'not implemented'
+def auto_scale_reward(action,valid,closer,terminal,fail,**kwargs):
+    assert False, 'not implemented'
 if __name__ == '__main__':
     print("Start test Agent")
     config_sparse_SAC = {'train_n_episodes':100000,
