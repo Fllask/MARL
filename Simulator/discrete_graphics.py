@@ -20,14 +20,14 @@ from physics_scipy import side2corners,get_cm
 s3 =np.sqrt(3)
 base = np.array([[1,0.5],[0,s3/2]])
 def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,linewidth=1):
-    fig,ax = plt.subplots(1,1,figsize=(h*(maxs[0]+maxs[1]*0.5)/((maxs[1]-0.5)*s3),h))
+    fig,ax = plt.subplots(1,1,figsize=(h*(maxs[0]+maxs[1]*0.5+0.5)/((maxs[1])*s3/2+1),h))
     xlim = [-0.5,maxs[0]+0.5*maxs[1]]
     ylim = [-s3/2,maxs[1]*s3/2]
-    ax.set_aspect('equal')
+    #ax.set_aspect('equal')
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
     #draw the horizontal lines
-    y = np.arange(ylim[0],ylim[1],s3/2*steps)
+    y = np.arange(ylim[0],ylim[1]+0.1,s3/2*steps)
     y = np.stack([y,y])
     ax.plot(np.reshape(xlim,(2,1)),y,color=color,linewidth=linewidth)
     #draw the 60 degrees lines
@@ -203,7 +203,7 @@ def draw_side(ax,coord,color=None,animated=False,linewidth=2):
     #art += [ax.scatter(corners[0,:,0],corners[0,:,1],color=color)]
     
     return art
-def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,animated=False,solve=True):
+def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,max_norm=0.4,animated=False,solve=True):
     if solve:
         constraints = force_bag.solve(soft=True)
     if force_bag.x_soft is None:
@@ -222,38 +222,58 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,anim
         constraints = force_bag.constraints
         for failed in faileds:
             if force_bag.xid[failed]==-1:
-                continue
-            f_stick = constraints[failed]
-            blocks = np.unique(force_bag.roweqid[force_bag.Aeq[:,failed]!=0])
-            for block in blocks:
-                Aeq_block=force_bag.Aeq[force_bag.roweqid==block]
-                pos =posx[failed]
-                scale = 1/ np.max(np.append(x[~np.all(Aeq_block==0,axis=0)],force_bag.beq[force_bag.roweqid==block][1]))/2
-                arts+=[plt.arrow(pos[0],
-                                  pos[1],
-                                  -Aeq_block[0,failed]*f_stick*scale,
-                                  -Aeq_block[1,failed]*f_stick*scale,
-                                  color='r',
-                                  width=0.1,
-                                  animated= animated,
-                                  zorder=100)]
-    #     bids_failed = np.unique(blocksid[faileds])
-    #     for bid in bids_failed:
-    #         mov = -constraints[force_bag.roweqid==bid]
-    #         cm = force_bag.cmpos[bid]
-    #         n = np.sqrt(mov[0]*mov[0]+mov[1]*mov[1])*2
-    #         arts+=[ax.arrow(cm[0],cm[1],
-    #                         mov[0]/n,mov[1]/n,
-    #                         color='r',
-    #                         width=0.2,
-    #                         animated= animated,
-    #                         zorder=99)]
-
-    #         ax.add_artist(arts[-1])
-            # if abs(mov[2])>1e-6:
-            #     arts+=ax.plot(cm[0],cm[1],marker=r'$\circlearrowleft$',c='r',zorder=98,ms=50,animated = animated)
-            # if abs(mov[2])<-1e-6:
-            #     arts+=ax.plot(cm[0],cm[1],marker=r'$\circlearrowright$',c='r',zorder=98,ms=50,animated = animated)
+                idxr = failed//6*6
+                
+                bid_held = np.unique(force_bag.roweqid[force_bag.Aeq[:,idxr]==1])
+                Aeq_block=force_bag.Aeq[force_bag.roweqid==bid_held]
+                f_stick = constraints[failed]
+                cm = force_bag.Aeq[force_bag.roweqid==bid_held][[2,2],[idxr+2,idxr]]
+                cm[1]=-cm[1]
+                
+                if uniform_scale is None:
+                    scale = max_norm/(np.max(
+                        np.append(x[~np.all(force_bag.Aeq[force_bag.roweqid==bid_held]==0,axis=0)],
+                                  force_bag.beq[force_bag.roweqid==bid_held][1])))
+                else:
+                    scale = uniform_scale
+                if failed%6 < 4:
+                    arts+=[plt.arrow(cm[0],
+                                    cm[1],
+                                    -Aeq_block[0,failed]*f_stick*scale,
+                                    -Aeq_block[1,failed]*f_stick*scale,
+                                    color='r',
+                                    width=0.1,
+                                    animated= animated,
+                                    zorder=102)]
+                else:
+                    arts+=[ax.arrow(cm[0]+0.5, cm[1],0,
+                                    f_stick*scale,
+                                    color='r',
+                                    width=0.1,
+                                    animated= animated,
+                                    zorder=102)]
+                    arts+=[ax.arrow(cm[0]-0.5, cm[1],0,
+                                    -f_stick*scale,
+                                    color='r',
+                                    width=0.1,
+                                    animated= animated,
+                                    zorder=102)]
+                        
+            else:
+                f_stick = constraints[failed]
+                blocks = np.unique(force_bag.roweqid[force_bag.Aeq[:,failed]!=0])
+                for block in blocks:
+                    Aeq_block=force_bag.Aeq[force_bag.roweqid==block]
+                    pos =posx[failed]
+                    scale = 1/ np.max(np.append(x[~np.all(Aeq_block==0,axis=0)],force_bag.beq[force_bag.roweqid==block][1]))*max_norm
+                    arts+=[plt.arrow(pos[0],
+                                      pos[1],
+                                      -Aeq_block[0,failed]*f_stick*scale,
+                                      -Aeq_block[1,failed]*f_stick*scale,
+                                      color='r',
+                                      width=0.1,
+                                      animated= animated,
+                                      zorder=100)]
     #draw the forces from the robots:
     if rids is None:
         rids = np.arange(force_bag.nr)
@@ -264,11 +284,12 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,anim
             fr_x = x[idxr]-x[idxr+1]
             fr_y = x[idxr+2]-x[idxr+3]
             Mr = x[idxr+4]-x[idxr+5]
-            cm = force_bag.cmpos[bid_held[0]]
+            cm = force_bag.Aeq[force_bag.roweqid==bid_held][[2,2],[idxr+2,idxr]]
+            cm[1]=-cm[1]
             f2 = fr_x*fr_x+fr_y*fr_y
             
             if uniform_scale is None:
-                scale = 1/(2*np.max(
+                scale = max_norm/(np.max(
                     np.append(x[~np.all(force_bag.Aeq[force_bag.roweqid==bid_held]==0,axis=0)],
                               force_bag.beq[force_bag.roweqid==bid_held][1])))
             else:
@@ -278,25 +299,25 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,anim
                                             color=plt.cm.Set2(r),
                                             width=0.05,
                                             animated= animated,
-                                            zorder=100)]
+                                            zorder=101)]
             if abs(Mr) > 1e-6:
                 arts+=[ax.arrow(cm[0]+0.5, cm[1],0,Mr*scale,
                                             color=plt.cm.Set2(r),
                                             width=0.05,
                                             animated= animated,
-                                            zorder=100)]
+                                            zorder=101)]
                 arts+=[ax.arrow(cm[0]-0.5, cm[1],0,-Mr*scale,
                                             color=plt.cm.Set2(r),
                                             width=0.05,
                                             animated= animated,
-                                            zorder=100)]
+                                            zorder=101)]
     if bids is None:
         bids = np.arange(1,n_blocks+1)
     for i in bids:
         Aeq_block = force_bag.Aeq[force_bag.roweqid==i]
         if uniform_scale is None:
             x_blocks = x[~np.all(Aeq_block==0,axis=0)]
-            scale = 1/2/np.max(np.append(x_blocks,force_bag.beq[force_bag.roweqid==i][1]))
+            scale = max_norm/np.max(np.append(x_blocks,force_bag.beq[force_bag.roweqid==i][1]))
         else:
             scale = uniform_scale
         #draw the weight
@@ -304,7 +325,7 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,anim
         f_g = -force_bag.beq[force_bag.roweqid==i][:2]
         
         arts+=[ax.arrow(cm[0],cm[1],f_g[0]*scale,f_g[1]*scale,
-                                    color=plt.cm.Pastel1(i%10),
+                                    color=plt.cm.Pastel1(i%8),
                                     width=0.05,
                                     animated= animated,
                                     zorder=100)]
@@ -320,7 +341,7 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,anim
                                   pos[1],
                                   Aeq_block[0,idxx]*fs*scale,
                                   Aeq_block[1,idxx]*fs*scale,
-                                  color=plt.cm.Pastel1(i%10),
+                                  color=plt.cm.Pastel1(i%8),
                                   width=0.05,
                                   animated= animated,
                                   zorder=100)]
@@ -331,7 +352,7 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,anim
                                      pos[1],
                                      Aeq_block[0,idxx+1]*ff*scale,
                                      Aeq_block[1,idxx+1]*ff*scale,
-                                     color=plt.cm.Pastel1(i%10),
+                                     color=plt.cm.Pastel1(i%8),
                                      width=0.05,
                                      animated= animated,
                                      zorder=100)]
@@ -432,7 +453,10 @@ def fill_grid(ax,
               ground_color='darkslategrey',
               graph = None,
               connectivity = None,
-              forces_bag=None):
+              forces_bag=None,
+              draw_arrows = True,
+              linewidth=2,
+              fixed_color = None):
     ids = np.unique(grid.occ)
     arts = []
     for i in ids:
@@ -443,21 +467,33 @@ def fill_grid(ax,
             arts += fill_triangle(ax, coords.T,color=ground_color,animated=animated)
         else:
             coords = np.array(np.where(grid.occ==i))
-            if use_con:
-                if grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 0:
-                    color = plt.cm.Pastel2(0)
-                elif grid.connection[coords[0,0],coords[1,0],coords[2,0]] == 1:
-                    color = plt.cm.Pastel2(1)
-                else:
-                    color = plt.cm.Pastel2(3)
-            if use_forces and forces_bag is not None:
+            if fixed_color is not None:
+                color = fixed_color
+            elif use_con:
+                color = plt.cm.Pastel2(grid.connection[coords[0,0],coords[1,0],coords[2,0]])
+            elif use_forces and forces_bag is not None:
                 c = forces_bag.solve(soft=True)
                 if c is not None:
                     x = forces_bag.x_soft[:forces_bag.Aeq.shape[1]]
-                    val = np.max(np.append(x[~np.all(forces_bag.Aeq[forces_bag.roweqid==i]==0,axis=0)],forces_bag.beq[forces_bag.roweqid==i][1]))
-                    color = plt.cm.plasma(val/np.min(np.abs(forces_bag.b[:forces_bag.nr*6])))
+                    x_robot = x[:forces_bag.nr*6][~np.all(forces_bag.Aeq[forces_bag.roweqid==i,:forces_bag.nr*6]==0,axis=0)]
+                    forces = np.delete(forces_bag.b[:forces_bag.nr*6],
+                                       np.concatenate([np.arange(forces_bag.nr)*6+4,np.arange(forces_bag.nr)*6+5]))
+                    if len(x_robot)>0:
+                        locr, = np.nonzero(np.any(forces_bag.Aeq[forces_bag.roweqid==i,:forces_bag.nr*6]!=0,axis=1))
+                        rid = locr[0]//6
+                        val = np.max(x_robot[:4] / forces[rid*4:4+rid*4])
+                        color = plt.cm.plasma(val)
+                    else:
+                        x_block = x[forces_bag.nr*6:][~np.all(forces_bag.Aeq[forces_bag.roweqid==i,forces_bag.nr*6:]==0,axis=0)]
+                        x_grouped = x_block[0::6]+x_block[3::6]
+                        val = np.max(np.append(x_grouped,forces_bag.beq[forces_bag.roweqid==i][1]))
+                        #take the smallest constraints on the robot forces
+                        
+                        minforce = np.min(np.abs(forces))
+                        color = plt.cm.plasma(val/minforce)
                 else:
                     color=plt.cm.plasma(np.nan)
+            
             else:
                 color = plt.cm.turbo(i/len(ids))
             arts +=fill_triangle(ax, coords.T,color=color,animated=animated)
@@ -467,9 +503,9 @@ def fill_grid(ax,
     ids = grid.neighbours[grid.neighbours[:,:,:,:,1]!=-1,1]
     for i in range(coords.shape[1]):
         if draw_neigh:
-            arts+=draw_side(ax,coords[:,i],color = plt.cm.tab10(ids[i]),  animated=animated)
+            arts+=draw_side(ax,coords[:,i],color = plt.cm.tab10(ids[i]),  animated=animated,linewidth=linewidth)
         else:
-            arts+=draw_side(ax,coords[:,i],color = 'grey',animated=animated)
+            arts+=draw_side(ax,coords[:,i],color = 'grey',animated=animated,linewidth=linewidth)
     if draw_hold:
         for i in np.unique(grid.hold):
             if i ==-1:
@@ -478,11 +514,11 @@ def fill_grid(ax,
             coords = np.array(coords).T
             coords = np.concatenate([np.tile(coords,(3,1)),np.repeat(np.arange(3),coords.shape[0])[...,None]],axis=1)
             for coord in coords:
-                arts+=draw_side(ax, coord,color=plt.cm.Set2(i),animated=animated)
+                arts+=draw_side(ax, coord,color=plt.cm.Set2(i),animated=animated,linewidth=linewidth)
     
     if graph is not None:
         arts+= add_graph(ax, graph,animated = animated,connectivity=connectivity)
-    if forces_bag is not None:
+    if forces_bag is not None and draw_arrows:
         arts+=draw_forces(ax,grid,forces_bag,uniform_scale=None,solve=False,animated=animated)
     return arts
 def animate(fig,arts_list,sperframe= 0.1):

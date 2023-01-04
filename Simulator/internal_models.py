@@ -775,6 +775,7 @@ class SACSparseOptimizer():
         self.log_freq = self.pol.log_freq
         self.Qs = [ValNetSparse(maxs_grid,max_blocks,n_robots,n_regions,n_actions,config,self.use_wandb)
                   for i in range(2)]
+        self.max_entropy = np.log(n_actions)
         self.target_Qs = copy.deepcopy(self.Qs)
         lr = config['opt_lr']
         wd = config['opt_weight_decay']
@@ -818,7 +819,8 @@ class SACSparseOptimizer():
             tV, _ = torch.min(tV,dim=1)
         elif self.Qval_reduction == 'mean':
             tV = torch.mean(tV,dim=1)          
-        tV[~torch.any(torch.tensor(nmask,device=self.pol.device),dim=1)]=0
+        #the entropy bonus is kept in the terminal state value, as its value has no upper bound
+        tV[~torch.any(torch.tensor(nmask,device=self.pol.device),dim=1)]=F.relu(self.alpha)*self.target_entropy
         #update the critics
         losses = torch.zeros(2,device = self.pol.device)
         for i in range(2):

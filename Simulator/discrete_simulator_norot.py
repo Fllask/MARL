@@ -70,6 +70,7 @@ class DiscreteSimulator():
                 self.graph.add_rel(bid1,bid2,ori,side1,side2,con1,con2)
                 self.ninterface+=1
             self.ph_mod.add_block(self.grid,block,self.nbid)
+            self.type_id[self.nbid]=blocktypeid
             self.nbid+=1
 
         return valid,closer, interfaces
@@ -90,7 +91,7 @@ class DiscreteSimulator():
                 valid1 = self.graph.add_rel(bid1,bid2,ori,side1,side2,con1,con2)
                 valid2 = self.graph.add_rel(bid2,bid1,(ori+3)%6,side2,side1,con2,con1)
                 if not (valid1 and valid2):
-                    return False,None
+                    return False,None,None
             self.ph_mod.add_block(self.grid,block,self.nbid)
             self.type_id[self.nbid]=blocktypeid
             self.nbid+=1
@@ -135,16 +136,17 @@ class DiscreteSimulator():
         self.grid.hold[self.grid.hold==rid]=-1
         self.ph_mod.leave_block(rid)
         return bid
-    def hold(self,rid,bid):
+    def hold(self,rid,bid,hold_pos_rel=[0,0]):
         '''hold the block bid'''
         if bid is None:
             return True
         if bid < 1 or  bid >=self.nbid:
-            #cannot remove the ground
+            #cannot hold the ground
             return False
         #self.prev.grid = copy.deepcopy(self.grid)
+        self.leave(rid)
         self.grid.hold[self.grid.occ==bid]=rid
-        exist = self.ph_mod.hold_block(bid, rid)
+        exist = self.ph_mod.hold_block(bid, rid,hold_pos_rel)
         if exist:
             self.graph.hold(bid, rid)
         return exist

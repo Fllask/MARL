@@ -13,7 +13,7 @@ import numpy as np
 import pickle
 from discrete_blocks_norot import discret_block_norot as Block
 from internal_models import ReplayBufferGraph
-from relative_single_agent import SACSupervisorSparse,generous_reward,punitive_reward
+from relative_single_agent import SACSupervisorSparse,generous_reward,punitive_reward,modular_reward
 #from single_agent import reward_link2,A2CSupervisor,A2CSupervisorStruc,generate_mask_supervisor,vec2act_sup
 from discrete_simulator_norot import DiscreteSimulator as Sim,Transition as Trans
 import discrete_graphics as gr
@@ -54,13 +54,16 @@ class ReplayDiscreteGymSupervisor():
         self.sim = Sim(maxs,n_robots,block_type,len(targets_loc),max_blocks,max_interfaces)
         self.random_targets = random_targets
         self.targets = targets
+        self.gap_range = config.get('gap_range')
+        if self.gap_range is None:
+            self.gap_range = [1,self.sim.grid.shape[0]-2]
         if random_targets == 'fixed':
             for tar,loc in zip(targets,targets_loc):
                 self.sim.add_ground(tar,loc)
         self.agent = agent_type(n_robots,
                                 block_type,
                                 self.config,
-                                ground_block = targets[0],
+                                ground_block = targets[-1],
                                 action_choice =actions,
                                 grid_size=maxs,
                                 use_wandb=use_wandb,
@@ -71,10 +74,8 @@ class ReplayDiscreteGymSupervisor():
                 self.rewardf = punitive_reward
             elif config['reward']=='generous':
                 self.rewardf = generous_reward
-            elif config['reward']=='nsides':
-                pass
-            elif config['reward']=='autoscale':
-                pass
+            elif config['reward']=='modular':
+                self.rewardf = modular_reward
         else:
             self.rewardf = reward_function
         self.setup = copy.deepcopy(self.sim)
@@ -92,7 +93,7 @@ class ReplayDiscreteGymSupervisor():
         failure = False
         rewards_ar = np.zeros((self.n_robots,max_steps))
         self.sim =copy.deepcopy(self.setup)
-        
+        gap=None
         if self.random_targets== 'random':
             validlocs = np.ones(self.sim.grid.shape,dtype=bool)
             #dont allow the target to be all the way to the extremity of the grid
@@ -115,7 +116,14 @@ class ReplayDiscreteGymSupervisor():
                 self.sim.add_ground(tar,[valid[idx],0])
                 
                 validlocs[max(valid[idx]-2,0):valid[idx]+3]=False
+        if self.random_targets == 'random_gap':
             
+            
+            gap = np.random.randint(self.gap_range[0],self.gap_range[1])
+                
+            tar = Block([[i,0,1] for i in range(self.sim.grid.shape[0]-gap-1)],muc=0.7)
+            self.sim.add_ground(tar,[0,0])
+            self.sim.add_ground(triangle,[self.sim.grid.shape[0]-1,0])
         elif self.random_targets== 'half_fixed':
             assert False, "not implemented"
                     
@@ -146,7 +154,17 @@ class ReplayDiscreteGymSupervisor():
                 if step == max_steps-1 and idr == self.n_robots-1:
                     #the end of the episode is reached
                     mask[:]=False
-                reward =self.rewardf(action, valid, closer, success,failure,n_sides=interfaces)
+                    
+                    
+                    
+                if interfaces is not None:
+                    sides_id,n_sides_ori = np.unique(interfaces[:,0],return_counts=True)
+                    n_sides = np.zeros(6,dtype=int)
+                    n_sides[sides_id.astype(int)]=n_sides_ori
+                else:
+                    n_sides = None
+                
+                reward =self.rewardf(action, valid, closer, success,failure,n_sides=n_sides,config=self.config)
                 
                     
                 rewards_ar[idr,step]=reward
@@ -178,7 +196,7 @@ class ReplayDiscreteGymSupervisor():
         else:
             anim = None
         
-        return rewards_ar,step, anim,buffer,buffer_count,success
+        return rewards_ar,step, anim,buffer,buffer_count,success,gap
     
     def training(self,
                 pfreq = 10,
@@ -187,8 +205,11 @@ class ReplayDiscreteGymSupervisor():
                 save_freq = 1000,
                 success_rate_decay = 0.01,
                 log_dir=None):
-        
-        success_rate = 0
+        if self.random_targets == 'random_gap':
+            success_rate = np.zeros(self.gap_range[1])
+            success_rate[0]=1
+        else:
+            success_rate = 0
         if log_dir is None:
             if self.use_wandb:
                 log_dir = self.run.dir
@@ -209,22 +230,32 @@ class ReplayDiscreteGymSupervisor():
         print("Training started")
         for episode in range(self.config['train_n_episodes']):
             (rewards_ep,n_steps_ep,
-             anim,buffer,buffer_count, success) = self.episode_restart(max_steps,
+             anim,buffer,buffer_count, success,gap) = self.episode_restart(max_steps,
                                                               draw = episode % draw_freq == 0,#draw_freq-1,
                                                               buffer=buffer,
                                                               buffer_count=buffer_count,
                                                               )
-            if success:
-                success_rate = (1-success_rate_decay)*success_rate +success_rate_decay
+            if self.random_targets == 'random_gap':
+                if success:
+                    success_rate[gap] = (1-success_rate_decay)*success_rate[gap] +success_rate_decay
+                else:
+                    success_rate[gap] = (1-success_rate_decay)*success_rate[gap]
             else:
-                success_rate = (1-success_rate_decay)*success_rate
+                if success:
+                    success_rate = (1-success_rate_decay)*success_rate +success_rate_decay
+                else:
+                    success_rate = (1-success_rate_decay)*success_rate
             
             if episode % pfreq==0:
                 print(f'episode {episode}/{self.config["train_n_episodes"]} rewards: {np.sum(rewards_ep,axis=1)}')
             if episode % save_freq == 0:
                 self.agent.save(f"ep_{episode}",log_dir)
             if self.use_wandb and episode % self.log_freq == 0:
-                wandb.log({'succes_rate':success_rate})
+                if self.random_targets == 'random_gap':
+                    for i in np.arange(self.gap_range[0],self.gap_range[1]):
+                        wandb.log({f'success_rate_gap{i}':success_rate[i]})
+                else:
+                    wandb.log({'succes_rate':success_rate})
             if anim is not None:
                 if self.use_wandb:
                     wandb.log({'animation':wandb.Html(anim.to_jshtml())})
@@ -278,6 +309,49 @@ class ReplayDiscreteGymSupervisor():
         #anim = self.sim.animate()
         return None
 
+
+    def test_gap(self,gap=None):
+        if gap is None:
+            if self.gap_range is not None:
+                gap = np.random.randint(self.gap_range[0],self.gap_range[1])
+            else:
+                gap = np.random.randint(1,self.sim.grid.shape[0]-3)
+        tar = Block([[i,0,1] for i in range(self.sim.grid.shape[0]-gap-1)],muc=0.7)
+        self.sim.add_ground(tar,[0,0])
+        self.sim.add_ground(triangle,[self.sim.grid.shape[0]-1,0])
+        
+        from relative_single_agent import int2act_norot
+        self.agent.Act(self.sim,'Ph',rid=0,
+                        sideblock=0,
+                        sidesup = 0,
+                        bid_sup = 0,
+                        idconsup = 1,
+                        blocktypeid = 0,
+                        side_ori = 0,
+                        draw= False)
+        self.agent.Act(self.sim,'Ph',rid=1,
+                        sideblock=0,
+                        sidesup = 0,
+                        bid_sup = 1,
+                        idconsup = 0,
+                        blocktypeid =0,
+                        side_ori = 5,
+                        draw= False)
+        self.agent.Act(self.sim,'Ph',rid=0,
+                        sideblock=0,
+                        sidesup = 0,
+                        bid_sup = 2,
+                        idconsup = 0,
+                        blocktypeid =0,
+                        side_ori = 1,
+                        draw= False)
+        self.agent.Act(self.sim,'L',rid=0,
+                       )
+        self.agent.Act(self.sim,'L',rid=1,
+                        )
+        setup = copy.deepcopy(self.sim)
+        self.sim.draw_state_debug()
+        
 if __name__ == '__main__':
     print("Start test gym")
     # config={'train_n_episodes':60000,
@@ -305,7 +379,7 @@ if __name__ == '__main__':
             'ep_use_mask':True,
             'agent_discount_f':0.1,
             'agent_last_only':True,
-            'reward': 'punitive',
+            'reward': 'modular',
             'torch_device':'cuda',
             'SEnc_n_channels':32,
             'SEnc_n_internal_layer':4,
@@ -328,19 +402,27 @@ if __name__ == '__main__':
             'opt_entropy_penalty':False,
             'opt_Q_reduction': 'min',
             'V_optimistic':False,
+            'reward_failure':-1,
+            'reward_action':{'Ph': 0, 'L':-0.1},
+            'reward_closer':0.4,
+            'reward_nsides': 0.1,
+            'reward_success':1,
+            'reward_opposite_sides':0,
+            'gap_range':[1,3]
             }
     hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
     linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7) 
     linkl = Block([[0,0,0],[0,1,1],[1,0,0],[0,1,0],[0,0,1],[-1,1,1]],muc=0.7) 
     linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.7)
-    target = Block([[0,0,1],[1,0,1]])
+    #target = Block([[0,0,1],[1,0,1]])
+    target = Block([[0,0,1]])
     gym = ReplayDiscreteGymSupervisor(config,
               agent_type=SACSupervisorSparse,
-              use_wandb=False,
+              use_wandb=True,
               actions= ['Ph','L'],
-              block_type=[hexagon],
-              random_targets='fixed',
-              targets_loc=[[2,0],[5,0]],
+              block_type=[hexagon,linkl],
+              random_targets='random_gap',
+              targets_loc=[[2,0],[6,0]],
               n_robots=2,
               max_blocks = 20,
               targets=[target]*2,
@@ -349,6 +431,7 @@ if __name__ == '__main__':
               maxs = [10,10])
     t0 = time.perf_counter()
     anim = gym.training(max_steps = 20, draw_freq = 100,pfreq =10)
+    #gym.test_gap()
     #gr.save_anim(anim,os.path.join(".", f"test_graph"),ext='html')
     t1 = time.perf_counter()
     print(f"time spent: {t1-t0}s")

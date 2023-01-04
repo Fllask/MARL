@@ -774,7 +774,20 @@ def generate_mask(state,rid,n_side,last_only,max_blocks,n_robots,action_choices)
 def args2idx(pos,ori,grid_size):
     idx =  (pos[:,0]*grid_size[1]*6+pos[:,1]*6+ori).astype(int)
     return idx
-
+def modular_reward(action,valid,closer,success,fail,config=None,n_sides = None, **kwargs):
+    if fail: 
+        return config['reward_failure']
+    reward =0
+    reward+=config['reward_action'][action]
+    if success:
+        reward+= config['reward_success']
+    if closer is not None and closer == 1:
+        reward+=config['reward_closer']
+    if n_sides is not None:
+        reward += config['reward_nsides']*np.sum(n_sides)
+        if not np.all(np.logical_xor(n_sides[:3],n_sides[3:])):
+            reward += config['reward_opposite_sides']
+    return reward
 def generous_reward(action,valid,closer,terminal,fail,n_sides,**kwargs):
     #reward specific to the case where the robots need to link two points
 

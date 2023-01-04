@@ -12,7 +12,7 @@ class Graph():
                  n_reg,
                  maxblocks,
                  maxinterface,
-                 maxinterface_ground = 12,
+                 maxinterface_ground = 100,
                  ):
         self.bt = n_blocktype
         self.n_robot = n_robot

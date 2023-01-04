@@ -16,12 +16,14 @@ class stability_solver_discrete():
     def __init__(self,
                  Fx_robot = [-1000,1000],
                  Fy_robot = [-1000,1000],
-                 M_robot = [-10000,10000],
+                 M_robot = [-0,0],
                  n_robots = 2,
                  F_max = 100,
+                 safety_kernel = 0.2,
                  ):
         self.F_max = F_max
         self.nr = n_robots
+        self.safety_kernel = safety_kernel
         self.A = np.diag(np.ones(self.nr*6))
         
         self.b = np.zeros(self.nr*6)
@@ -45,7 +47,16 @@ class stability_solver_discrete():
         self.x_soft=None
         self.constraints = None
         # self.last_sol = np.zeros(0)
-        
+    def set_max_forces(self,rid,Fx=None,Fy=None,M=None):
+        if Fx is not None:
+            self.b[rid*6]=Fx[1]
+            self.b[rid*6+1]=-Fx[0]
+        if Fy is not None:
+            self.b[rid*6+2]=Fy[1]
+            self.b[rid*6+3]=-Fy[0]
+        if M is not None:
+            self.b[rid*6+4]=M[1]
+            self.b[rid*6+5]=-M[0]
     def add_block(self,grid,block,bid,interfaces=None):
 
         #get all the potential supports:
@@ -96,7 +107,7 @@ class stability_solver_discrete():
         nAeqcorner[1,sup2idx+1]=np.sqrt(3)/2
         
         #compute the postion of each corner:
-        pos = side2corners(sup)
+        pos = side2corners(sup,security_factor=self.safety_kernel)
         pos0 = pos[sup0idx_s]
         pos1 = pos[sup1idx_s]
         pos2 = pos[sup2idx_s]
@@ -197,7 +208,7 @@ class stability_solver_discrete():
             return False
         self.Aeq[row0:row0+3,rid*6:(rid+1)*6]= [[1,-1,0,0,0,0],
                                                [0,0,1,-1,0,0],
-                                               [hold_pos_abs[1],-hold_pos_abs[1],hold_pos_abs[0],-hold_pos_abs[0],1,-1]]
+                                               [-hold_pos_abs[1],hold_pos_abs[1],hold_pos_abs[0],-hold_pos_abs[0],1,-1]]
         return True
     def leave_block(self,rid):
         self.Aeq[:,rid*6:(rid+1)*6]=0
@@ -217,10 +228,13 @@ class stability_solver_discrete():
             q = np.concatenate([self.c,self.c*1000000])
             G = np.hstack([self.A,np.zeros(self.A.shape)])
             A = np.hstack([self.Aeq,-self.Aeq])
-            x_soft = solve_qp(P,q,A=A,b=self.beq,G=G,h=self.b,lb=np.zeros(self.c.shape[0]*2),solver='quadprog',verbose=True)
-            if x_soft is not None:
-                self.x_soft=x_soft[:x_soft.shape[0]//2]
-                self.constraints = x_soft[x_soft.shape[0]//2:]
+            #x_soft = solve_qp(P,q,A=A,b=self.beq,G=G,h=self.b,lb=np.zeros(self.c.shape[0]*2),solver='quadprog',verbose=True)
+            res_soft = linprog(q,G,self.b,A,self.beq,method=method)
+            if not res_soft.success:
+                print("warning: soft constraints solver did not converge")
+            else:
+                self.x_soft=res_soft.x[:res_soft.x.shape[0]//2]
+                self.constraints = res_soft.x[res_soft.x.shape[0]//2:]
                 return self.constraints
         else:
             res = linprog(self.c,self.A,self.b,self.Aeq,self.beq,method=method)
