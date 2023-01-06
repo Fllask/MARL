@@ -45,7 +45,7 @@ class DiscreteSimulator():
         self.nbid=1
         self.ninterface = 1
         self.prev = None
-    def setup_anim(self,h=12):
+    def setup_anim(self,h=6):
         self.frames = []
         self.fig,self.ax = gr.draw_grid(self.grid.occ.shape[:2],color='k',h=h)
     def add_ground(self,block,pos):
@@ -161,7 +161,7 @@ class DiscreteSimulator():
     def check(self):
         res = self.ph_mod.solve()
         if res.status not in [0,2]:
-            print("warning: error in the static solver")
+            print("warning: error in the static solver. "+res.message)
         return res.status == 0
     def add_frame(self):
         '''add a frame to later animate the simulation'''

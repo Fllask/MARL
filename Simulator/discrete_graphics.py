@@ -19,8 +19,11 @@ from physics_scipy import side2corners,get_cm
 
 s3 =np.sqrt(3)
 base = np.array([[1,0.5],[0,s3/2]])
-def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,linewidth=1):
-    fig,ax = plt.subplots(1,1,figsize=(h*(maxs[0]+maxs[1]*0.5+0.5)/((maxs[1])*s3/2+1),h))
+def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,w=None,linewidth=1):
+    if w is None:
+        fig,ax = plt.subplots(1,1,figsize=(h*(maxs[0]+maxs[1]*0.5+0.5)/((maxs[1])*s3/2+1),h))
+    else:
+        fig,ax = plt.subplots(1,1,figsize=(w,w*((maxs[1])*s3/2+1)/(maxs[0]+maxs[1]*0.5+0.5)))
     xlim = [-0.5,maxs[0]+0.5*maxs[1]]
     ylim = [-s3/2,maxs[1]*s3/2]
     #ax.set_aspect('equal')
@@ -400,22 +403,22 @@ def add_graph(ax,graph,animated=False,connectivity = 'sparse'):
     
     [ax.add_artist(a) for a in arts]
     return arts
-def write_state(grid,h,linewidth = 0.5,alpha=0.5):
-    fig,axs = plt.subplots(1,3,figsize=(3*h*((grid.shape[0])+(grid.shape[1])*0.5)/(((grid.shape[1])-0.5)*s3),h))
+def write_state_OD(grid,h,linewidth = 0.5,alpha=0.5,scale=None):
+    fig,axs = plt.subplots(1,3,figsize=(3*h*((grid.shape[0]+grid.shape[1]*0.5+0.5)/((grid.shape[1])*s3/2+1)-0.3),h))
     xlim = [-0.5,grid.shape[0]+0.5*(grid.shape[1])]
     ylim = [-s3/2,(grid.shape[1])*s3/2]
-    channels = ['bid','rid','cid']
+    channels = ['block id','robot id','region id']
     for ax,channel in zip(axs,channels):
         #prepare the drawing
         ax.set_aspect('equal')
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.axis('off')
-        ax.set_title(f'Channel: {channel}')
+        ax.set_title(f'Channel: {channel}',fontsize = h*4.5)
         #draw the grid
         
         #draw the horizontal lines
-        y = np.arange(ylim[0],ylim[1],s3/2)
+        y = np.arange(0,ylim[1]-0.1,s3/2)
         y = np.stack([y,y])
         ax.plot(np.reshape(xlim,(2,1)),y,color='k',linewidth=linewidth)
         #draw the 60 degrees lines
@@ -430,19 +433,87 @@ def write_state(grid,h,linewidth = 0.5,alpha=0.5):
         y = np.stack([y-xlim[0]*s3,y-xlim[1]*s3])    
         ax.plot(np.reshape(xlim,(2,1)),y,color='k',linewidth=linewidth)
         
-        if channel == 'bid':
+        if channel == 'block id':
             grid_ar = grid.occ
-        elif channel == 'rid':
+        elif channel == 'robot id':
             grid_ar = grid.hold
-        elif channel == 'cid':
+        elif channel == 'region id':
             grid_ar = grid.connection
         ids = np.unique(grid_ar)
+        if scale is None:
+            scale = (1+ids[-1])
         for i in ids:
             coords = np.array(np.where(grid_ar[:-1,:-1,:]==i))
-            fill_triangle(ax, coords.T,color=plt.cm.turbo((i+1)/(1+ids[-1])),alpha=alpha,text=str(i),fontsize=h*1.5)
-            
+            #fill_triangle(ax, coords.T,color=plt.cm.gnuplot2((i+1)/scale),alpha=alpha,text=str(i),fontsize=h*4)
+            if i == -1:
+                fill_triangle(ax, coords.T,color='k',alpha=0.5,text=str(i),fontsize=h*4)
+            else:
+                fill_triangle(ax, coords.T,color=plt.cm.Set3((i)),alpha=alpha,text=str(i),fontsize=h*4)
         
         # ax.set_yticklabels(np.arange(-xlim[0],np.floor((ylim[1]-ylim[0])/np.sqrt(3))-xlim[0]+1))
+def write_state_OI(grid,h,linewidth = 0.5,alpha=0.5,scale=None):
+    fig,axs = plt.subplots(3,3,figsize=(h*((grid.shape[0]+grid.shape[1]*0.5+0.5)/((grid.shape[1])*s3/2+1)-0.3),h))
+    axs = np.ravel(axs)
+    xlim = [-0.5,grid.shape[0]+0.5*(grid.shape[1])]
+    ylim = [-s3/2,(grid.shape[1])*s3/2]
+    channels = ['side 0','side 1','side 2','is ground','robot id','region id','','is last','']
+    for ax,channel in zip(axs,channels):
+        if channel == '':
+            ax.remove()
+            continue
+        #prepare the drawing
+        ax.set_aspect('equal')
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.axis('off')
+        ax.set_title(f'Channel: {channel}',fontsize=h*1.5)
+        #draw the grid
+        
+        #draw the horizontal lines
+        y = np.arange(0,ylim[1]-0.1,s3/2)
+        y = np.stack([y,y])
+        ax.plot(np.reshape(xlim,(2,1)),y,color='k',linewidth=linewidth)
+        #draw the 60 degrees lines
+        y = np.arange(ylim[0]-(xlim[1])*s3,ylim[1]-(xlim[0])*s3,s3)
+        y = y-y[np.argmin(abs(y))]
+        y = np.stack([y+xlim[0]*s3,y+xlim[1]*s3])    
+        
+        ax.plot(np.reshape(xlim,(2,1)),y,color='k',linewidth=linewidth)
+        #draw the -60 degree lines
+        y = np.arange(ylim[0]+(xlim[0])*s3,ylim[1]+(xlim[1])*s3,s3)
+        y = y-y[np.argmin(abs(y))]
+        y = np.stack([y-xlim[0]*s3,y-xlim[1]*s3])    
+        ax.plot(np.reshape(xlim,(2,1)),y,color='k',linewidth=linewidth)
+        
+        if channel == 'side 0':
+            grid_ar = grid.neighbours[:,:,:,0,0]>-1
+        elif channel == 'side 1':
+            grid_ar = grid.neighbours[:,:,:,1,0]>-1
+        elif channel == 'side 2':
+            grid_ar = grid.neighbours[:,:,:,2,0]>-1
+        elif channel == 'is last':
+            grid_ar = grid.occ== np.max(grid.occ)
+        elif channel == 'is ground':
+            grid_ar = grid.occ== 0
+        elif channel == 'robot id':
+            grid_ar = grid.hold
+        elif channel == 'region id':
+            grid_ar = grid.connection
+        else:
+            pass
+        ids = np.unique(grid_ar)
+        if scale is None:
+            scale = (1+ids[-1])
+        for i in ids:
+            coords = np.array(np.where(grid_ar[:-1,:-1,:]==i))
+            #fill_triangle(ax, coords.T,color=plt.cm.turbo((i+1)/scale),alpha=alpha,text=str(int(i)),fontsize=h*1.3)
+            if i == -1:
+                fill_triangle(ax, coords.T,color='k',alpha=0.5,text=str(int(i)),fontsize=h*1.3)
+            else:
+                fill_triangle(ax, coords.T,color=plt.cm.Set3((i)),alpha=alpha,text=str(int(i)),fontsize=h*1.3)
+        
+        # ax.set_yticklabels(np.arange(-xlim[0],np.floor((ylim[1]-ylim[0])/np.sqrt(3))-xlim[0]+1))
+
 def fill_grid(ax,
               grid,
               draw_neigh =False,

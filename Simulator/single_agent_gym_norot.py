@@ -13,7 +13,7 @@ import numpy as np
 import pickle
 from discrete_blocks_norot import discret_block_norot as Block
 from internal_models import ReplayBufferGraph
-from relative_single_agent import SACSupervisorSparse,generous_reward,punitive_reward,modular_reward
+from relative_single_agent import SACSupervisorSparse,generous_reward,punitive_reward,modular_reward,A2CSupervisor
 #from single_agent import reward_link2,A2CSupervisor,A2CSupervisorStruc,generate_mask_supervisor,vec2act_sup
 from discrete_simulator_norot import DiscreteSimulator as Sim,Transition as Trans
 import discrete_graphics as gr
@@ -208,6 +208,7 @@ class ReplayDiscreteGymSupervisor():
         if self.random_targets == 'random_gap':
             success_rate = np.zeros(self.gap_range[1])
             success_rate[0]=1
+            res_dict={}
         else:
             success_rate = 0
         if log_dir is None:
@@ -253,7 +254,8 @@ class ReplayDiscreteGymSupervisor():
             if self.use_wandb and episode % self.log_freq == 0:
                 if self.random_targets == 'random_gap':
                     for i in np.arange(self.gap_range[0],self.gap_range[1]):
-                        wandb.log({f'success_rate_gap{i}':success_rate[i]})
+                        res_dict[f'success_rate_gap{i}']=success_rate[i]
+                    wandb.log(res_dict)
                 else:
                     wandb.log({'succes_rate':success_rate})
             if anim is not None:
@@ -373,7 +375,7 @@ if __name__ == '__main__':
     #         'opt_tau': 1e-5,
     #         'opt_weight_decay':1e-3,
     #         'opt_exploration_factor':0.1}
-    config = {'train_n_episodes':6000,
+    config = {'train_n_episodes':10000,
             'train_l_buffer':200,
             'ep_batch_size':32,
             'ep_use_mask':True,
@@ -384,7 +386,7 @@ if __name__ == '__main__':
             'SEnc_n_channels':32,
             'SEnc_n_internal_layer':4,
             'SEnc_stride':1,
-            'SEnc_order_insensitive':False,
+            'SEnc_order_insensitive':True,
             'SAC_n_fc_layer':2,
             'SAC_n_neurons':64,
             'SAC_batch_norm':True,
@@ -397,18 +399,56 @@ if __name__ == '__main__':
             'agent_exp_strat':'softmax',
             'agent_epsilon':0.05,
             'opt_max_norm': 2,
-            'opt_target_entropy':1.,
+            'opt_target_entropy':0.2,
             'opt_value_clip':False,
             'opt_entropy_penalty':False,
             'opt_Q_reduction': 'min',
             'V_optimistic':False,
             'reward_failure':-1,
-            'reward_action':{'Ph': 0, 'L':-0.1},
+            'reward_action':{'Ph': -0.2, 'L':-0.1},
             'reward_closer':0.4,
             'reward_nsides': 0.1,
             'reward_success':1,
             'reward_opposite_sides':0,
-            'gap_range':[1,3]
+            #'gap_range':[1,3]
+            }
+    config_A2C = {'train_n_episodes':10000,
+            'train_l_buffer':200,
+            'ep_batch_size':32,
+            'ep_use_mask':True,
+            'agent_discount_f':0.1,
+            'agent_last_only':True,
+            'reward': 'modular',
+            'torch_device':'cuda',
+            'SEnc_n_channels':32,
+            'SEnc_n_internal_layer':4,
+            'SEnc_stride':1,
+            'SEnc_order_insensitive':True,
+            'A2C_n_fc_layer':2,
+            'A2C_n_neurons':64,
+            'A2C_batch_norm':True,
+            'A2C_shared':False,
+            'Q_duel':True,
+            'opt_lr':1e-4,
+            'opt_pol_over_val': 1,
+            'opt_tau': 1e-3,
+            'opt_weight_decay':0.0001,
+            'opt_exploration_factor':0.001,
+            'agent_exp_strat':'softmax',
+            'agent_epsilon':0.05,
+            'opt_max_norm': 2,
+            'opt_target_entropy':0.2,
+            'opt_value_clip':False,
+            'opt_entropy_penalty':False,
+            'opt_Q_reduction': 'min',
+            'V_optimistic':False,
+            'reward_failure':-1,
+            'reward_action':{'Ph': -0.2, 'L':-0.1},
+            'reward_closer':0.4,
+            'reward_nsides': 0.1,
+            'reward_success':1,
+            'reward_opposite_sides':0,
+            #'gap_range':[1,3]
             }
     hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
     linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7) 
@@ -416,21 +456,21 @@ if __name__ == '__main__':
     linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.7)
     #target = Block([[0,0,1],[1,0,1]])
     target = Block([[0,0,1]])
-    gym = ReplayDiscreteGymSupervisor(config,
-              agent_type=SACSupervisorSparse,
-              use_wandb=True,
+    gym = ReplayDiscreteGymSupervisor(config_A2C,
+              agent_type=A2CSupervisor,
+              use_wandb=False,
               actions= ['Ph','L'],
-              block_type=[hexagon,linkl],
+              block_type=[hexagon],
               random_targets='random_gap',
               targets_loc=[[2,0],[6,0]],
               n_robots=2,
               max_blocks = 20,
               targets=[target]*2,
               max_interfaces = 50,
-              log_freq = 10,
+              log_freq = 30,
               maxs = [10,10])
     t0 = time.perf_counter()
-    anim = gym.training(max_steps = 20, draw_freq = 100,pfreq =10)
+    anim = gym.training(max_steps = 20, draw_freq = 200,pfreq =100)
     #gym.test_gap()
     #gr.save_anim(anim,os.path.join(".", f"test_graph"),ext='html')
     t1 = time.perf_counter()

@@ -1545,7 +1545,7 @@ class StateEncoderOE(nn.Module):
             print("Warning, this encoder cannot differentiate between blocks, so last-only option is highly recommended")
         self.nrob = n_robots
         self.nreg = n_regions
-        self.convin = nn.Conv2d(12,n_channels,3,stride=1,device=device)
+        self.convin = nn.Conv2d(14,n_channels,3,stride=1,device=device)
         self.convinternal = nn.ModuleList([nn.Conv2d(n_channels,n_channels,3,stride=stride,device=device) for i in range(n_internal_layer)])
         self.device=device
         dimx = maxs_grid[0]-1
@@ -1558,11 +1558,11 @@ class StateEncoderOE(nn.Module):
     def forward(self,grids):
         sides = torch.tensor(np.array([grid.neighbours[:,:,:,:,0]>-1 for grid in grids]),device=self.device,dtype=torch.float)
         last_block = torch.tensor(np.array([grid.occ== np.max(grid.occ) for grid in grids]),device=self.device,dtype=torch.float)
-        
+        ground = torch.tensor(np.array([grid.occ== 0 for grid in grids]),device=self.device,dtype=torch.float)
         hold = torch.tensor(np.array([grid.hold for grid in grids]),device=self.device)/self.nrob
         con = torch.tensor(np.array([grid.connection for grid in grids]),device=self.device)/self.nreg
         
-        inputs = torch.cat([sides.flatten(-2),last_block,hold,con],3)
+        inputs = torch.cat([sides.flatten(-2),last_block,ground,hold,con],3)
         if torch.any(torch.isnan(inputs)):
             assert False, 'nans in the input'
         inputs= inputs.permute(0,3,1,2)

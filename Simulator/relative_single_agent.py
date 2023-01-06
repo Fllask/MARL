@@ -275,7 +275,6 @@ class SACSupervisorSparse(SupervisorRelative):
                  max_blocks=30,
                  max_interfaces = 120,
                  n_regions = 2,
-                 discount_f = 0.1,
                  use_mask=True,
                  last_only=True,
                  use_wandb=False,
@@ -404,24 +403,48 @@ class A2CSupervisor(SupervisorRelative):
                  n_robots,
                  block_choices,
                  config,
+                 ground_block = None,
                  action_choice = ['Pl','Ph','L'],
                  grid_size = [10,10],
                  max_blocks=30,
+                 max_interfaces = 120,
                  n_regions = 2,
                  use_wandb=False,
+                 discount_f = 0.1,
+                 use_mask=True,
+                 last_only=True,
+                 log_freq = None,
+                 env='rot'
                  ):
-        super().__init__(n_robots,block_choices,config,use_wandb)
+        super().__init__(n_robots,block_choices,config,use_wandb=use_wandb,log_freq = log_freq,env=env)
         self.action_choice = action_choice
         self.grid_size = grid_size
         self.n_typeblock = len(block_choices)
         self.max_blocks = max_blocks
+        self.rep = 'grid'
         self.n_side = [block.neigh.shape[0] for block in block_choices]
-        
-        if self.last_only:
-            self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
+        if self.env =='norot':
+            self.n_side_oriented = np.array([[np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
+                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
+                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),] for block in block_choices])
+            
+            self.n_side_oriented_sup = np.array([[np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
+                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
+                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in [ground_block]+ block_choices])
+            #check the genererate_mask_norot function to understand why these parameters
+            self.n_actions = n_robots*(1+len(block_choices))*(1+len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
         else:
-            self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
-        self.action_per_robot =self.n_actions//n_robots
+            if self.last_only:
+                self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
+            else:
+                self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
+            self.action_per_robot =self.n_actions//n_robots
         
 
         self.model = im.A2CShared(grid_size,
@@ -486,7 +509,12 @@ class A2CSupervisor(SupervisorRelative):
         else:
             return None,None,actionid
     def generate_mask(self,state,rid):
-        return generate_mask(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots)
+        if self.env == 'norot':
+            return generate_mask_no_rot(state.grid, rid, self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.n_robots,self.action_choice,state.type_id)
+        if 'Pl' in self.action_choice:
+            return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
+        else:
+            return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
 
 
 def int2act_norot(action_id,n_block,n_robots, n_side_b,n_side_sup,last_only,max_blocks,action_choices):
@@ -887,7 +915,7 @@ if __name__ == '__main__':
             'ep_use_mask':True,
             'agent_discount_f':0.1,
             'agent_last_only':True,
-            'torch_device':'cpu',
+            'torch_device':'gpu',
             'SEnc_n_channels':32,
             'SEnc_n_internal_layer':4,
             'SEnc_stride':1,

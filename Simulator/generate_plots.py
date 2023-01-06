@@ -14,7 +14,9 @@ import numpy as np
 def gen_grid(h=10):
     fig,ax=gr.draw_grid([5,5],label_points=True,steps=1,color='k',h=h,linewidth=1)
     fig.tight_layout()
-    plt.savefig('../graphics/grid1.pdf')  
+    plt.savefig('../graphics/grid.pdf')  
+def get_w(h,maxs):
+    return h*(0.5+0.5*maxs[1]+maxs[0])/(np.sqrt(3)*maxs[1]/2+1)
 def gen_blocks(h=20):
     fig,ax = gr.draw_grid([6,3],h=h,color='k',linewidth=0.8,label_points = False)
     hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]])
@@ -137,7 +139,7 @@ def gen_forces_no_robot(h,muc,name):
     plt.savefig(f'../graphics/forces/{name}.pdf')
     plt.show()
 def gen_forces_no_robot_kernel(h,kernel,name,unstable=False):
-    maxs=[10,10]
+    maxs=[5,5]
     hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
     linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7) 
     linkl = Block([[0,0,0],[0,1,1],[1,0,0],[0,1,0],[0,0,1],[-1,1,1]],muc=0.7) 
@@ -147,7 +149,7 @@ def gen_forces_no_robot_kernel(h,kernel,name,unstable=False):
     sim = DiscreteSimulator(maxs, 1, [hexagon,linkr,linkl,linkh], 1, 30, 30)
     sim.ph_mod.safety_kernel=kernel
     sim.ph_mod.set_max_forces(0,Fx=[-50,50])
-    sim.add_ground(ground, [6,1])
+    sim.add_ground(ground, [3,0])
     sim.put_rel(hexagon, 0, 0, 0, 0,idconsup=0)
     if unstable:
         sim.put_rel(linkh, 0, 0, 1, 0,idconsup=0)
@@ -155,7 +157,7 @@ def gen_forces_no_robot_kernel(h,kernel,name,unstable=False):
         sim.put_rel(linkr, 0, 0, 1, 0,idconsup=0)
     sim.hold(0,3)
     fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=0.7,label_points = False)
-    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=False)
+    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=False,linewidth=3)
     plt.tight_layout()
     plt.savefig(f'../graphics/forces/{name}.pdf')
     plt.show()
@@ -211,7 +213,7 @@ def gen_forces_colors(h,name,n_blocks):
         
     sim.ph_mod.set_max_forces(0,M=[-50,50],Fy = [-36*(n_blocks-1),36*(n_blocks-1)])
     fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=0.7,label_points = False)
-    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=True,linewidth=2,draw_forces=False)
+    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=True,linewidth=2,draw_arrows=False)
     plt.tight_layout()
     plt.savefig(f'../graphics/colormaps/{name}_color_forces_strong_noforce.pdf')
     plt.show()
@@ -219,7 +221,7 @@ def gen_forces_colors(h,name,n_blocks):
     
     sim.ph_mod.set_max_forces(0,M=[-50,50],Fy = [-6*(n_blocks-1),6*(n_blocks-1)])
     fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=0.7,label_points = False)
-    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=True,linewidth=2,draw_forces=False)
+    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=True,linewidth=2,draw_arrows=False)
     plt.tight_layout()
     plt.savefig(f'../graphics/colormaps/{name}_color_forces_weak_noforce.pdf')
     plt.show()
@@ -323,12 +325,12 @@ def colormap_bid(h,w,vert=False,font_ratio =1/5,bar_aspect =1/20):
     plt.tight_layout()
     plt.savefig(f'../graphics/colormaps/colormap_bid.pdf')
     plt.show()
-def colormap_arrows(h,font_ratio =1/3):
+def colormap_arrows(h,w):
     # Create figure and adjust figure height to number of colormaps
     n_colors = 8
     colorid = np.arange(n_colors)
     colors = plt.cm.Pastel1(colorid)
-    fig, ax = plt.subplots(1, figsize=(h, h),subplot_kw={'projection': 'polar'})
+    fig, ax = plt.subplots(1, figsize=(w,h),subplot_kw={'projection': 'polar'})
     #ax.set_title(f'Forces arrow colormap', fontsize=2*h/font_ratio)
     ax.bar(x=np.arange(0,np.pi*2,np.pi*2/n_colors),
        bottom=0.9, height=0.5, width = np.pi*2/n_colors-0.05,
@@ -337,7 +339,62 @@ def colormap_arrows(h,font_ratio =1/3):
     plt.tight_layout()
     plt.savefig(f'../graphics/colormaps/colormap_arrow_force.pdf')
     plt.show()
-def gen_scenario(h,draw_forces=False,name="",turn=0):
+def color_arrows_example(h):
+    hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
+    ground = Block([[0,0,0]],muc=0.7)
+    sim = DiscreteSimulator([7,4], 1, [hexagon], 2, 30, 30)
+    #sim.ph_mod.set_max_forces(0,Fx=[-Fxmax,Fxmax],M=[-0,0])
+    sim.add_ground(ground, [1,0])
+    sim.add_ground(ground, [6,0])
+    sim.put_rel(hexagon, 0, 0, 0, 4,idconsup=0)
+    sim.put_rel(hexagon, 0, 0, 1, 4,idconsup=0)
+    sim.put_rel(hexagon, 0, 0, 2, 2,idconsup=0)
+    
+    fig,ax = gr.draw_grid([6,5],h=h,color='none',linewidth=0.7,label_points = False)
+    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=False,linewidth=1)
+    plt.tight_layout()
+    plt.savefig(f'../graphics/forces/color_arrow_example.pdf')
+    plt.show()
+def build(sim):
+    ground = Block([[0,0,1]],muc=0.7)
+    hexagon = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
+    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
+    linkl = Block([[1,0,1],[1,0,0],[0,1,1],[1,1,0],[1,1,1],[2,0,0]])
+    linkh = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[1,2,1],[2,0,0]])
+    #sim.ph_mod.set_max_forces(0,Fx=[-Fxmax,Fxmax],M=[-0,0])
+    sim.add_ground(ground, [1,0])
+    sim.add_ground(ground, [7,0])
+    sim.put(hexagon, [1,0])
+    sim.put(hexagon,[7,0])
+    sim.put(linkr,[0,2])
+    sim.put(linkl,[5,2])
+    sim.put(hexagon,[1,3])
+    sim.put(linkh,[2,3])
+    #sim.put(hexagon,[4,3])
+    
+    sim.hold(0,4)
+    sim.hold(1,6)
+    
+def gen_visualisation_type(h,name,order_independant=False):
+    hexagon = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
+    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
+    linkl = Block([[1,0,1],[1,0,0],[0,1,1],[1,1,0],[1,1,1],[2,0,0]])
+    linkh = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[1,2,1],[2,0,0]])
+    sim = DiscreteSimulator([8,6], 1, [hexagon,linkr,linkl,linkh], 2, 30, 30)
+    
+    build(sim)
+    
+    # fig,ax = gr.draw_grid([8,5],h=h,color='none',linewidth=0.7,label_points = False)
+    # gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=False,linewidth=1)
+    if order_independant:
+        gr.write_state_OI(sim.grid, h,scale=10,alpha=0.7)
+        pass
+    else:
+        gr.write_state_OD(sim.grid, h,scale=10,alpha=0.7)
+    plt.tight_layout()
+    plt.savefig(f'../graphics/visualisation/{name}.pdf')
+    plt.show()
+def gen_scenario(h,draw_forces=False,name="",turn=0,colormap='force',linewidth=1.5):
     maxs = [10,7]
     hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
     ground = Block([[0,0,1]],muc=0.7)
@@ -352,69 +409,71 @@ def gen_scenario(h,draw_forces=False,name="",turn=0):
     sim.put_rel(hexagon, 0, 0, 3, 4)
     sim.hold(0,3)
     sim.hold(1,4)
-    
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=0.7,label_points = False)
-    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold=not draw_forces,draw_arrows = draw_forces, linewidth=1)
+    if colormap == 'force':
+        use_con=False
+        use_forces = True
+
+    if colormap == 'con':
+        use_con = True
+        use_forces = False
+
+    if colormap == 'id':
+        use_forces = False
+        use_con = False
+        
+        
+    fig,ax = gr.draw_grid(maxs,h=h,color='none',label_points = False)
+    gr.fill_grid(ax,
+                 sim.grid,use_con = use_con,
+                 use_forces = use_forces,
+                 forces_bag=sim.ph_mod,
+                 draw_hold=not draw_forces,
+                 draw_arrows = draw_forces,
+                 linewidth=linewidth)
     plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}initial_forces.pdf')
+    plt.savefig(f'../graphics/scenario/{name}initial_{colormap}.pdf')
     plt.show()
     
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=1.5,label_points = False)
-    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold = not draw_forces,linewidth=1,draw_arrows = draw_forces)
+    fig,ax = gr.draw_grid(maxs,h=h,color='none',label_points = False)
+    gr.fill_grid(ax,
+                 sim.grid,use_con = use_con,
+                 use_forces = use_forces,
+                 forces_bag=sim.ph_mod,
+                 draw_hold=not draw_forces,
+                 draw_arrows = draw_forces,
+                 linewidth=linewidth)
+    
     action_args={'sideblock':0,'sidesup':0,'bid_sup':4,'side_ori':2,'idconsup':0}
     gr.draw_action_rel(ax,turn, 'Ph',hexagon,sim.grid,animated=False,multi=False,**action_args)
     plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}action_force.pdf')
+    plt.savefig(f'../graphics/scenario/{name}action_{colormap}.pdf')
     plt.show()
-    
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=0.7,label_points = False)
-    gr.fill_grid(ax, sim.grid,use_con=True,draw_hold = not draw_forces,draw_arrows = draw_forces,linewidth=1.5,forces_bag=sim.ph_mod)
+    sim.leave(turn)
+    fig,ax = gr.draw_grid(maxs,h=h,color='none',label_points = False)
+    gr.fill_grid(ax,
+                 sim.grid,use_con = use_con,
+                 use_forces = use_forces,
+                 forces_bag=sim.ph_mod,
+                 draw_hold=not draw_forces,
+                 draw_arrows = draw_forces,
+                 linewidth=linewidth)
     plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}initial_con.pdf')
-    plt.show()
-    
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=1.5,label_points = False)
-    gr.fill_grid(ax, sim.grid,use_con=True,draw_hold = not draw_forces,linewidth=1.5,draw_arrows = draw_forces,forces_bag=sim.ph_mod)
-    action_args={'sideblock':0,'sidesup':0,'bid_sup':4,'side_ori':2,'idconsup':0}
-    gr.draw_action_rel(ax,turn, 'Ph',hexagon,sim.grid,animated=False,multi=False,**action_args)
-    plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}action_con.pdf')
-    plt.show()
-    
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=1.5,label_points = False)
-    gr.fill_grid(ax, sim.grid,use_forces = False,draw_hold = not draw_forces,linewidth=1.5,draw_arrows = draw_forces,forces_bag=sim.ph_mod)
-    plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}initial_id.pdf')
-    plt.show()
-    
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=1.5,label_points = False)
-    gr.fill_grid(ax, sim.grid,use_forces = False,draw_hold = not draw_forces,linewidth=1.5,draw_arrows = draw_forces,forces_bag=sim.ph_mod)
-    action_args={'sideblock':0,'sidesup':0,'bid_sup':4,'side_ori':2,'idconsup':0}
-    gr.draw_action_rel(ax,turn, 'Ph',hexagon,sim.grid,animated=False,multi=False,**action_args)
-    plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}action_id.pdf')
+    plt.savefig(f'../graphics/scenario/{name}intermediate_{colormap}.pdf')
     plt.show()
     if turn == 0:
         sim.put_rel(hexagon, 0, 0, 4, 2)
         sim.hold(0, 5)
-    else:
-        sim.leave(1)
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=0.7,label_points = False)
-    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_hold = True,linewidth=1,draw_arrows = draw_forces)
+        
+    fig,ax = gr.draw_grid(maxs,h=h,color='none',label_points = False)
+    gr.fill_grid(ax,
+                 sim.grid,use_con = use_con,
+                 use_forces = use_forces,
+                 forces_bag=sim.ph_mod,
+                 draw_hold=not draw_forces,
+                 draw_arrows = draw_forces,
+                 linewidth=linewidth)
     plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}final_forces.pdf')
-    plt.show()
-    
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=0.7,label_points = False)
-    gr.fill_grid(ax, sim.grid,use_con=True,draw_hold = not draw_forces,linewidth=1.5,draw_arrows = draw_forces,forces_bag=sim.ph_mod)
-    plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}final_con.pdf')
-    plt.show()
-    
-    fig,ax = gr.draw_grid(maxs,h=h,color='none',linewidth=1.5,label_points = False)
-    gr.fill_grid(ax, sim.grid,use_forces = False, draw_hold = not draw_forces,linewidth=1.5,draw_arrows = draw_forces,forces_bag=sim.ph_mod)
-    plt.tight_layout()
-    plt.savefig(f'../graphics/scenario/{name}final_id.pdf')
+    plt.savefig(f'../graphics/scenario/{name}final_{colormap}.pdf')
     plt.show()
 def gen_example_robots(h,rid,linewidth=3):
     
@@ -436,37 +495,52 @@ def gen_example_robots(h,rid,linewidth=3):
     plt.savefig('../graphics/robot_example/h.pdf')
     plt.show()
 def gen_forces(h):
-    gen_forces_no_robot(h,0.7,"equilibrium07")
-    gen_forces_no_robot(h,0.5,"equilibrium05")
-    gen_forces_no_robot(h,0.3,"equilibrium03")
-    gen_forces_no_robot(h,0,"equilibrium0")
+    # gen_forces_no_robot(h,0.7,"equilibrium07")
+    # gen_forces_no_robot(h,0.5,"equilibrium05")
+    # gen_forces_no_robot(h,0.3,"equilibrium03")
+    # gen_forces_no_robot(h,0,"equilibrium0")
     gen_forces_no_robot_kernel(h,0,"kernel0")
     gen_forces_no_robot_kernel(h,0.2,"kernel02")
     gen_forces_no_robot_kernel(h,0.5,"kernel05")
     gen_forces_no_robot_kernel(h,0,"kernel0_unstable",unstable=True)
     gen_forces_no_robot_kernel(h,0.2,"kernel02_unstable",unstable=True)
-    
-    for i in range(9):
-        gen_forces_max(h,i,50,f"vert_force{i}")
-    for i in range(9):
-        gen_forces_max_diag(h,i,50,f"diag_force_50N_{i}")
-        gen_forces_max_diag(h,i,70,f"diag_force_70N_{i}")
+    gen_forces_no_robot_kernel(h,0.5,"kernel05_unstable",unstable=True)
+    # for i in range(5):
+    #     gen_forces_max(h,i,50,f"vert_force{i+1}")
+    # for i in range(6):
+    #     gen_forces_max_diag(h,i,50,f"diag_force_50N_{i+1}",maxs=[8,8])
+    #     gen_forces_max_diag(h,i,70,f"diag_force_70N_{i+1}",maxs=[8,8])
+    color_arrows_example(h)
 def gen_color_examples(h):
     gen_forces_colors(h,"stack",7)
 def gen_colormaps(h):
-    colormap_arrows(h*3)
+    colormap_arrows(0.74*h/0.25,get_w(h,[6,5]))
     colormap_forces(h, h/1.7,font_ratio=3/12,vert = True)
     colormap_bid(h, h/1.7,font_ratio=3/12,vert = True)
-    colormap_region(h,h/1.7,font_ratio=3/12)
-    colormap_robot(h,  h*0.8,font_ratio=3/12,title_font=15,n_robots = 6)
-
+    colormap_region(h,h/1.7,font_ratio=3/12,n_region=2)
+    colormap_robot(h,  h*1.11,font_ratio=3/12,title_font=15,n_robots = 6)
+def gen_visualisation(h):
+    hexagon = Block([[1,0,0],[0,1,1],[1,1,1],[1,1,0],[0,2,1],[0,1,0]])
+    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]])
+    linkl = Block([[1,0,1],[1,0,0],[0,1,1],[1,1,0],[1,1,1],[2,0,0]])
+    linkh = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[1,2,1],[2,0,0]])
+    sim = DiscreteSimulator([8,6], 1, [hexagon,linkr,linkl,linkh], 2, 30, 30)
+    
+    build(sim)
+    fig,ax = gr.draw_grid([8,6],h=h,color='k',linewidth=2,label_points = False)
+    gr.fill_grid(ax, sim.grid,forces_bag=sim.ph_mod,draw_arrows=False,linewidth=h)
+    plt.tight_layout()
+    plt.savefig(f'../graphics/visualisation/rep.pdf')
+    
+    gen_visualisation_type(h,'OI',order_independant=True)
+    gen_visualisation_type(h,'OD',order_independant=False)
 if __name__ == "__main__":
-    gen_grid(h=10)
-    #gen_blocks(h=20)
-    # gen_forces(h=8)
+    # gen_grid(h=10)
+    # gen_blocks(h=20)
+    #gen_forces(h=8)
+    gen_visualisation(8)
     #gen_colormaps(8)
-    #gen_color_examples(8)
-    #gen_structures(h=20)
-    #gen_actions(h=8)
-    #gen_scenario(8,draw_forces=True,name="arrows_",turn=0)
-    #gen_example_robots(8,0)
+    # gen_color_examples(8)
+    # gen_structures(h=20)
+    #gen_scenario(8,draw_forces=False,name="net_fail_",turn=1,linewidth=4)
+    # gen_example_robots(8,0)
