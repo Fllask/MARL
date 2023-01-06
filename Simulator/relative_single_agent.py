@@ -83,7 +83,123 @@ class SupervisorRelative(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def choose_action(self,state):
         pass
-    
+class SupervisorRelativeSparse(SupervisorRelative):
+    def __init__(self,
+                 n_robots,
+                 block_choices,
+                 config,
+                 ground_block = None,
+                 action_choice = ['Pl','Ph','L'],
+                 grid_size = [10,10],
+                 max_blocks=30,
+                 max_interfaces = 120,
+                 n_regions = 2,
+                 use_mask=True,
+                 last_only=True,
+                 use_wandb=False,
+                 log_freq = None,
+                 env='rot'
+                 ):
+        super().__init__(n_robots,block_choices,config,use_wandb=use_wandb,log_freq = log_freq,env=env)
+        self.rep= 'grid'
+        self.action_choice = action_choice
+        self.grid_size = grid_size
+        self.n_typeblock = len(block_choices)
+        self.exploration_strat = config['agent_exp_strat']
+        if self.exploration_strat == 'epsilon-greedy' or self.exploration_strat == 'epsilon-softmax':
+            self.eps = config['agent_epsilon']
+        self.max_blocks = max_blocks
+        if self.env =='norot':
+            self.n_side_oriented = np.array([[np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
+                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
+                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),] for block in block_choices])
+            
+            self.n_side_oriented_sup = np.array([[np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
+                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
+                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in [ground_block]+ block_choices])
+            #check the genererate_mask_norot function to understand why these parameters
+            self.n_actions = n_robots*(1+len(block_choices))*(1+len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
+        
+        else:
+            self.n_sides = [len(block.neigh) for block in block_choices]
+            if 'Pl'in self.action_choice:
+                if last_only:
+                    self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
+                else:
+                    self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
+            else:
+                if last_only:
+                    self.n_actions = (max(self.n_side)*sum(self.n_side)+1)*n_robots
+                else:
+                    self.n_actions = (max(self.n_side)*sum(self.n_side)+1)*n_robots
+        self.action_per_robot =self.n_actions//n_robots
+    def update_policy(self,buffer,buffer_count,batch_size,steps=1):
+         for s in range(steps):
+            if batch_size > buffer_count:
+                return buffer_count
+        
+            if buffer_count <buffer.shape[0]:
+                batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
+            else:
+                batch = np.random.choice(buffer,batch_size,replace=False)
+                #compute the state value using the target Q table
+            if self.use_mask:
+                states = [trans.state['grid'] for trans in batch]
+                nstates = [trans.new_state['grid'] for trans in batch]
+                mask = np.array([trans.state['mask'] for trans in batch])
+                nmask = np.array([trans.new_state['mask'] for trans in batch])
+            else:
+                states = [trans.state['grid'] for trans in batch]
+                nstates = [trans.new_state['grid'] for trans in batch]
+                mask=None
+                nmask=None
+            actions = np.array([trans.a[0] for trans in batch])
+            rewards = np.array([[trans.r] for trans in batch],dtype=np.float32)
+
+            l_p = self.optimizer.optimize(states,actions,rewards,nstates,self.gamma,mask,nmask=nmask)
+        
+    def choose_action(self,r_id,state,explore=True,mask=None):
+        if mask is None:
+            mask = np.zeros(self.n_actions,dtype=bool)
+            mask[self.action_per_robot*r_id:self.action_per_robot*(1+r_id)]=True
+        actions_dist,logits = self.model([state.grid],inference = True,mask=mask)
+        if self.use_wandb and self.optimizer.step % self.log_freq == 0:
+            wandb.log({'action_dist':actions_dist.probs[0,mask]},step=self.optimizer.step)
+        if self.exploration_strat == 'softmax':
+            actionid = actions_dist.sample().detach().cpu().numpy()[0]
+            if self.use_wandb and self.optimizer.step % self.log_freq == 0:
+                wandb.log({'action_id':actionid},step=self.optimizer.step)
+        elif self.exploration_strat == 'epsilon-greedy':
+            if np.random.rand() > self.eps:
+                actionid = np.argmax(actions_dist.probs.detach().cpu().numpy())
+            else:
+                ids, = np.nonzero(mask)
+                actionid = np.random.choice(ids)
+        elif self.exploration_strat == 'epsilon-softmax':
+            if np.random.rand() > self.eps:
+                actionid = actions_dist.sample().detach().cpu().numpy()[0]
+            else:
+                ids, = np.nonzero(mask)
+                actionid = np.random.choice(ids)
+        if self.env == 'norot':
+            action,action_params = int2act_norot(actionid,state.graph.n_blocks,self.n_robots,self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.action_choice)
+        else:
+            action,action_params = int2act_sup(actionid,self.n_side,self.last_only,state.graph.n_blocks,self.max_blocks,self.action_choice)
+        return action,action_params,actionid,actions_dist.entropy()
+        
+    def generate_mask(self,state,rid):
+        if self.env == 'norot':
+            return generate_mask_no_rot(state.grid, rid, self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.n_robots,self.action_choice,state.type_id)
+        if 'Pl' in self.action_choice:
+            return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
+        else:
+            return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
 class A2CSupervisorDense(SupervisorRelative):
     def __init__(self,
                  n_robots,
@@ -264,7 +380,7 @@ class SACSupervisorDense(SupervisorRelative):
             return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
         else:
             return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
-class SACSupervisorSparse(SupervisorRelative):
+class SACSupervisorSparse(SupervisorRelativeSparse):
     def __init__(self,
                  n_robots,
                  block_choices,
@@ -281,46 +397,21 @@ class SACSupervisorSparse(SupervisorRelative):
                  log_freq = None,
                  env='rot'
                  ):
-        super().__init__(n_robots,block_choices,config,use_wandb=use_wandb,log_freq = log_freq,env=env)
-        self.rep= 'grid'
-        self.action_choice = action_choice
-        self.grid_size = grid_size
-        self.n_typeblock = len(block_choices)
-        self.exploration_strat = config['agent_exp_strat']
-        if self.exploration_strat == 'epsilon-greedy' or self.exploration_strat == 'epsilon-softmax':
-            self.eps = config['agent_epsilon']
-        self.max_blocks = max_blocks
-        if self.env =='norot':
-            self.n_side_oriented = np.array([[np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
-                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
-                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),
-                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
-                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
-                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),] for block in block_choices])
-            
-            self.n_side_oriented_sup = np.array([[np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
-                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
-                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in [ground_block]+ block_choices])
-            #check the genererate_mask_norot function to understand why these parameters
-            self.n_actions = n_robots*(1+len(block_choices))*(1+len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
-        
-        else:
-            self.n_sides = [len(block.neigh) for block in block_choices]
-            if 'Pl'in self.action_choice:
-                if last_only:
-                    self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
-                else:
-                    self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
-            else:
-                if last_only:
-                    self.n_actions = (max(self.n_side)*sum(self.n_side)+1)*n_robots
-                else:
-                    self.n_actions = (max(self.n_side)*sum(self.n_side)+1)*n_robots
-        self.action_per_robot =self.n_actions//n_robots
-
+        super().__init__(n_robots,
+                     block_choices,
+                     config,
+                     ground_block = ground_block,
+                     action_choice = action_choice,
+                     grid_size = grid_size,
+                     max_blocks=max_blocks,
+                     max_interfaces = max_interfaces,
+                     n_regions =n_regions,
+                     use_mask=use_mask,
+                     last_only=last_only,
+                     use_wandb=use_wandb,
+                     log_freq = log_freq,
+                     env=env
+                     )
         self.model = im.PolNetSparse(grid_size,
                                 max_blocks,
                                 n_robots,
@@ -337,36 +428,84 @@ class SACSupervisorSparse(SupervisorRelative):
                                               self.n_actions,
                                               self.model,
                                               config)
-    def update_policy(self,buffer,buffer_count,batch_size,steps=1):
-         for s in range(steps):
-            if batch_size > buffer_count:
-                return buffer_count
+class A2CSupervisor(SupervisorRelativeSparse):
+    def __init__(self,
+                 n_robots,
+                 block_choices,
+                 config,
+                 ground_block = None,
+                 action_choice = ['Pl','Ph','L'],
+                 grid_size = [10,10],
+                 max_blocks=30,
+                 max_interfaces = 120,
+                 n_regions = 2,
+                 use_wandb=False,
+                 discount_f = 0.1,
+                 use_mask=True,
+                 last_only=True,
+                 log_freq = None,
+                 env='rot'
+                 ):
+        super().__init__(n_robots,
+                     block_choices,
+                     config,
+                     ground_block = ground_block,
+                     action_choice = action_choice,
+                     grid_size = grid_size,
+                     max_blocks=max_blocks,
+                     max_interfaces = max_interfaces,
+                     n_regions =n_regions,
+                     use_mask=use_mask,
+                     last_only=last_only,
+                     use_wandb=use_wandb,
+                     log_freq = log_freq,
+                     env=env
+                     )
+        self.model = im.A2CShared(grid_size,
+                                  max_blocks,
+                                  n_robots,
+                                  n_regions,
+                                  self.n_actions,
+                                  config,
+                                  use_wandb=self.use_wandb,
+                                  )
         
-            if buffer_count <buffer.shape[0]:
-                batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
-            else:
-                batch = np.random.choice(buffer,batch_size,replace=False)
-                #compute the state value using the target Q table
-            if self.use_mask:
-                states = [trans.state['grid'] for trans in batch]
-                nstates = [trans.new_state['grid'] for trans in batch]
-                mask = np.array([trans.state['mask'] for trans in batch])
-                nmask = np.array([trans.new_state['mask'] for trans in batch])
-            else:
-                states = [trans.state['grid'] for trans in batch]
-                nstates = [trans.new_state['grid'] for trans in batch]
-                mask=None
-                nmask=None
-            actions = np.array([trans.a[0] for trans in batch])
-            rewards = np.array([[trans.r] for trans in batch],dtype=np.float32)
-
-            l_p = self.optimizer.optimize(states,actions,rewards,nstates,self.gamma,mask,nmask=nmask)
+        self.optimizer = im.A2CSharedOptimizer(self.model,config)
+        
+    # def update_policy(self,buffer,buffer_count,batch_size,steps=1):
+    #     if buffer_count==0 or (self.model.batch_norm and buffer_count < 2):
+    #         return
+        
+    #     # _,_,nactions = self.choose_action(nstates,explore=False)
+       
+    #     #while loss > conv_tol:
+    #     for s in range(steps):
+    #         if buffer_count <buffer.shape[0]:
+    #             batch_size = np.clip(batch_size,0,buffer_count)
+    #             batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
+    #         else:
+    #             batch = np.random.choice(np.delete(buffer,buffer_count%buffer.shape[0]),batch_size,replace=False)
+    #         #compute the state value using the target Q table
+    #         if self.use_mask:
+    #             states = [trans.state['grid'] for trans in batch]
+    #             nstates = [trans.new_state['grid'] for trans in batch]
+    #             mask = np.array([trans.state['mask'] for trans in batch])
+    #             nmask = np.array([trans.new_state['mask'] for trans in batch])
+                
+    #         else:
+    #             states = [trans.state['grid'] for trans in batch]
+    #             nstates = [trans.new_state['grid'] for trans in batch]
+    #             mask=None
+    #             nmask=None
+    #         actions = np.concatenate([trans.a[0] for trans in batch],axis=0)
+    #         rewards = np.array([[trans.r] for trans in batch],dtype=np.float32)
             
+    #         l_v,l_p = self.optimizer.optimize(states,actions,rewards,nstates,self.gamma,mask,nmask=nmask)
     def choose_action(self,r_id,state,explore=True,mask=None):
         if mask is None:
             mask = np.zeros(self.n_actions,dtype=bool)
             mask[self.action_per_robot*r_id:self.action_per_robot*(1+r_id)]=True
-        actions_dist,logits = self.model([state.grid],inference = True,mask=mask)
+        val, actions_dist = self.model([state.grid],inference = True,mask=mask)
         if self.use_wandb and self.optimizer.step % self.log_freq == 0:
             wandb.log({'action_dist':actions_dist.probs[0,mask]},step=self.optimizer.step)
         if self.exploration_strat == 'softmax':
@@ -390,133 +529,26 @@ class SACSupervisorSparse(SupervisorRelative):
         else:
             action,action_params = int2act_sup(actionid,self.n_side,self.last_only,state.graph.n_blocks,self.max_blocks,self.action_choice)
         return action,action_params,actionid,actions_dist.entropy()
-        
-    def generate_mask(self,state,rid):
-        if self.env == 'norot':
-            return generate_mask_no_rot(state.grid, rid, self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.n_robots,self.action_choice,state.type_id)
-        if 'Pl' in self.action_choice:
-            return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
-        else:
-            return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
-class A2CSupervisor(SupervisorRelative):
-    def __init__(self,
-                 n_robots,
-                 block_choices,
-                 config,
-                 ground_block = None,
-                 action_choice = ['Pl','Ph','L'],
-                 grid_size = [10,10],
-                 max_blocks=30,
-                 max_interfaces = 120,
-                 n_regions = 2,
-                 use_wandb=False,
-                 discount_f = 0.1,
-                 use_mask=True,
-                 last_only=True,
-                 log_freq = None,
-                 env='rot'
-                 ):
-        super().__init__(n_robots,block_choices,config,use_wandb=use_wandb,log_freq = log_freq,env=env)
-        self.action_choice = action_choice
-        self.grid_size = grid_size
-        self.n_typeblock = len(block_choices)
-        self.max_blocks = max_blocks
-        self.rep = 'grid'
-        self.n_side = [block.neigh.shape[0] for block in block_choices]
-        if self.env =='norot':
-            self.n_side_oriented = np.array([[np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
-                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
-                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),
-                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
-                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
-                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),] for block in block_choices])
-            
-            self.n_side_oriented_sup = np.array([[np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
-                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
-                                                  np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in [ground_block]+ block_choices])
-            #check the genererate_mask_norot function to understand why these parameters
-            self.n_actions = n_robots*(1+len(block_choices))*(1+len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
-        else:
-            if self.last_only:
-                self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
-            else:
-                self.n_actions = (2*max(self.n_side)*sum(self.n_side)+1)*n_robots
-            self.action_per_robot =self.n_actions//n_robots
-        
-
-        self.model = im.A2CShared(grid_size,
-                                  max_blocks,
-                                  n_robots,
-                                  n_regions,
-                                  self.n_actions,
-                                  config,
-                                  use_wandb=self.use_wandb,
-                                  )
-        
-        self.optimizer = im.A2CSharedOptimizer(self.model,config)
-        
-    def update_policy(self,buffer,buffer_count,batch_size,steps=1):
-        if buffer_count==0 or (self.model.batch_norm and buffer_count < 2):
-            return
-        
-        # _,_,nactions = self.choose_action(nstates,explore=False)
-       
-        #while loss > conv_tol:
-        for s in range(steps):
-            if buffer_count <buffer.shape[0]:
-                batch_size = np.clip(batch_size,0,buffer_count)
-                batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
-            else:
-                batch = np.random.choice(np.delete(buffer,buffer_count%buffer.shape[0]),batch_size,replace=False)
-            #compute the state value using the target Q table
-            if self.use_mask:
-                states = [trans.state['grid'] for trans in batch]
-                nstates = [trans.new_state['grid'] for trans in batch]
-                mask = np.array([trans.state['mask'] for trans in batch])
-                nmask = np.array([trans.new_state['mask'] for trans in batch])
-                
-            else:
-                states = [trans.state['grid'] for trans in batch]
-                nstates = [trans.new_state['grid'] for trans in batch]
-                mask=None
-                nmask=None
-            actions = np.concatenate([trans.a[0] for trans in batch],axis=0)
-            rewards = np.array([[trans.r] for trans in batch],dtype=np.float32)
-            
-            l_v,l_p = self.optimizer.optimize(states,actions,rewards,nstates,self.gamma,mask,nmask=nmask)
-            
-    def choose_action(self,r_id,state,explore=True,mask=None):
-        if mask is None:
-            mask = np.zeros(self.n_actions,dtype=bool)
-            mask[self.action_per_robot*r_id:self.action_per_robot*(1+r_id)]=True
-        if not isinstance(state,list):
-            state = [state.grid]
-        _,actions = self.model(state,inference = True,mask=mask)
-        if explore:
-            actionid = np.zeros(actions.shape[0],dtype=int)
-            for i,p in enumerate(actions.cpu().detach().numpy()):
-                actionid[i] = int(np.random.choice(self.n_actions,p=p))
-        else:
-            actionid = np.argmax(actions.cpu().detach().numpy(),axis=1)
-        if len(state)==1:
-            if actionid < 30:
-                pass
-            action,action_params = int2act_sup(actionid[0],self.n_side,self.last_only,np.max(state[0].occ),self.max_blocks)
-            return action,action_params,actionid
-        else:
-            return None,None,actionid
-    def generate_mask(self,state,rid):
-        if self.env == 'norot':
-            return generate_mask_no_rot(state.grid, rid, self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.n_robots,self.action_choice,state.type_id)
-        if 'Pl' in self.action_choice:
-            return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
-        else:
-            return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
-
-
+    # def choose_action(self,r_id,state,explore=True,mask=None):
+    #     if mask is None:
+    #         mask = np.zeros(self.n_actions,dtype=bool)
+    #         mask[self.action_per_robot*r_id:self.action_per_robot*(1+r_id)]=True
+    #     if not isinstance(state,list):
+    #         state = [state.grid]
+    #     _,actions = self.model(state,inference = True,mask=mask)
+    #     if explore:
+    #         actionid = np.zeros(actions.shape[0],dtype=int)
+    #         for i,p in enumerate(actions.cpu().detach().numpy()):
+    #             actionid[i] = int(np.random.choice(self.n_actions,p=p))
+    #     else:
+    #         actionid = np.argmax(actions.cpu().detach().numpy(),axis=1)
+    #     if len(state)==1:
+    #         if actionid < 30:
+    #             pass
+    #         action,action_params = int2act_sup(actionid[0],self.n_side,self.last_only,np.max(state[0].occ),self.max_blocks)
+    #         return action,action_params,actionid
+    #     else:
+    #         return None,None,actionid
 def int2act_norot(action_id,n_block,n_robots, n_side_b,n_side_sup,last_only,max_blocks,action_choices):
     if last_only:
         rid, btype_sup, btype, side_sup, side_b,side_ori =np.unravel_index(action_id,

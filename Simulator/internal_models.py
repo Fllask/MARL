@@ -1201,13 +1201,13 @@ class A2CShared(nn.Module):
                 mask = torch.tensor(~mask,device=self.device,dtype=torch.float).reshape(len(grids),-1)
                 rep_pol = self.out_pol(rep_pol)
                 rep_pol = rep_pol-mask*1e10
-                pol = F.softmax(rep_pol,dim=1)
+                dist = Categorical(logits = rep_pol)
             else:
-                pol = F.softmax(self.out_pol(rep_pol),dim=1)
-            if torch.any(torch.isnan(pol)):
+                dist = Categorical(logits = rep_pol)
+            if torch.any(torch.isnan(rep_pol)):
                 assert False, 'nans in the policy'
             
-            return val,pol
+            return val,dist
 class A2CSharedOptimizer():
     def __init__(self,model,config):
         lr = config['opt_lr']
@@ -1232,7 +1232,8 @@ class A2CSharedOptimizer():
     def optimize(self,state,actionid,rewards,nstates,gamma,mask=None,nmask=None):
         
         v,pol = self.model(state,mask=mask)
-        entropy = torch.sum(-pol*torch.log(pol+1e-10),dim=1)
+        #entropy = torch.sum(-pol*torch.log(pol+1e-10),dim=1)
+        entropy = pol.entropy()
         entropy = entropy.mean()
         next_v,_  = self.target_model(nstates,mask=nmask,inference = True)
         #put the value of the terminal state at 0
@@ -1244,7 +1245,7 @@ class A2CSharedOptimizer():
         #compute the critique loss
         l_v = self.model.loss_val(v,Qval)
         advantage = Qval-v.detach()
-        nll = -torch.log(1e-10+pol[torch.arange(pol.shape[0]),actionid])
+        nll = -torch.log(1e-10+pol.probs[torch.arange(pol.probs.shape[0]),actionid])
         l_p = torch.mean(torch.unsqueeze(nll,1)*advantage)
         if self.model.use_wandb:
             wandb.log({'policy_entropy':entropy},step=self.step)
