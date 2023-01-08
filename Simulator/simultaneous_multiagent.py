@@ -24,7 +24,7 @@ class AgentSimultanous(metaclass=abc.ABCMeta):
         self.n_robots = n_robots
         self.block_choices = block_choices
         self.use_wandb=use_wandb
-        self.log_freq = None
+        self.log_freq = log_freq
         self.env = env
         self.gamma = 1-config['agent_discount_f']
     def prepare_action(self,simulator,action):
@@ -50,14 +50,14 @@ class AgentSimultanous(metaclass=abc.ABCMeta):
             if oldbid is not None:
                 stable = simulator.check()
                 if not stable:
-                    return False,None,blocktype
-            valid,closer = simulator.put_rel(blocktype,sideblock,sidesup,bid_sup,side_ori,blocktypeid=blocktypeid,idconsup = idconsup)
+                    return False,None,blocktype,None
+            valid,closer,interfaces = simulator.put_rel(blocktype,sideblock,sidesup,bid_sup,side_ori,blocktypeid=blocktypeid,idconsup = idconsup)
                 
             if valid:
                 simulator.hold(self.rid,simulator.nbid-1)
         if action in {'L','S'}:
-            return True,None,None
-        return valid,closer,blocktype
+            return True,None,None,None
+        return valid,closer,blocktype,interfaces
     @abc.abstractmethod
     def generate_mask(self,state):
         pass
@@ -74,7 +74,7 @@ class SACSparse(AgentSimultanous):
                  rid,
                  block_choices,
                  config,
-                 ground_block = None,
+                 ground_blocks = None,
                  action_choice = ['P','L','S'],
                  grid_size = [10,10],
                  max_blocks=30,
@@ -91,6 +91,7 @@ class SACSparse(AgentSimultanous):
         self.rep= 'grid'
         self.action_choice = action_choice
         self.grid_size = grid_size
+        self.n_ground_type = len(ground_blocks)
         self.n_typeblock = len(block_choices)
         self.exploration_strat = config['agent_exp_strat']
         if self.exploration_strat == 'epsilon-greedy' or self.exploration_strat == 'epsilon-softmax':
@@ -109,11 +110,11 @@ class SACSparse(AgentSimultanous):
                                                   np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in [ground_block]+ block_choices])
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in ground_blocks+ block_choices])
             #check the genererate_mask_norot function to understand why these parameters
             
            
-            self.n_actions = (max_blocks+n_regions)*(1+len(block_choices))*(2+len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
+            self.n_actions = (max_blocks+n_regions)*(len(ground_blocks)+len(block_choices))*(2+len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
             self.gamma = 1-discount_f
         else:
             assert False, 'Not implemented'
@@ -161,12 +162,10 @@ class SACSparse(AgentSimultanous):
             mask = np.zeros(self.n_actions,dtype=bool)
             mask[self.action_per_robot*r_id:self.action_per_robot*(1+r_id)]=True
         actions_dist,logits = self.model([state.grid],inference = True,mask=mask)
-        if self.use_wandb and self.optimizer.step % self.log_freq == 0:
-            wandb.log({"Robot_"+self.rid+'_action_dist':actions_dist.probs[0,mask]},step=self.optimizer.step)
         if self.exploration_strat == 'softmax':
             actionid = actions_dist.sample().detach().cpu().numpy()[0]
             if self.use_wandb and self.optimizer.step % self.log_freq == 0:
-                wandb.log({"Robot_"+self.rid+'action_id':actionid},step=self.optimizer.step)
+                wandb.log({"Robot_"+str(self.rid)+'_action_id':actionid},step=self.optimizer.step)
         elif self.exploration_strat == 'epsilon-greedy':
             if np.random.rand() > self.eps:
                 actionid = np.argmax(actions_dist.probs.detach().cpu().numpy())
@@ -192,18 +191,29 @@ class SACSparse(AgentSimultanous):
         
     def generate_mask(self,state):
         if self.env == 'norot':
-            return generate_mask_norot(self.rid,
+            mask =  generate_mask_norot(self.rid,
                                        state.grid,
                                        self.n_side_oriented,
                                        self.n_side_oriented_sup,
                                        self.max_blocks,
                                        state.graph.n_reg,
                                        self.action_choice,
-                                       state.type_id)
+                                       state.type_id,
+                                       empty_id=-1-self.n_ground_type)
+            mask = complete_mask_norot(state.grid,
+                                       self.block_choices,
+                                       mask,
+                                       state.graph.n_blocks,
+                                       self.n_side_oriented,
+                                       self.n_side_oriented_sup,
+                                       self.max_blocks,
+                                       state.graph.n_ground,
+                                       )
+            return mask
         else:
             assert False, "Not implemented"
 
-def generate_mask_norot(rid,grid,n_side_b,n_side_sup,maxblocks,n_reg,action_choice,typeblocks,reverse=True):
+def generate_mask_norot(rid,grid,n_side_b,n_side_sup,maxblocks,n_reg,action_choice,typeblocks,reverse=False,empty_id=-2):
     mask = np.zeros((maxblocks+n_reg,
                      n_side_sup.shape[0],
                      n_side_b.shape[0]+2,
@@ -213,26 +223,41 @@ def generate_mask_norot(rid,grid,n_side_b,n_side_sup,maxblocks,n_reg,action_choi
                      ),dtype=bool)
     #only keep the blocks that are present
     if reverse:
-        typeblocks = reverse(typeblocks)
+        typeblocks = typeblocks[::-1]
     if 'P' in action_choice:
         for i,n_side in enumerate(n_side_b):
             for j,typesup in enumerate(typeblocks):
-                if typesup ==-2:
+                if typesup ==empty_id:
                     continue
-                typesup+=1#set the ground block at 0
+                typesup-=empty_id+1
                 for k in range(6):
                     mask[j,typesup,i,:n_side_sup[typesup,k],:n_side[k],k]=True
     #both these actions are presented 6 times to allow a little entropy increase in the final steps of the episode
     #mask for the leave action
     if 'L' in action_choice:
-        mask[0,0,-2,0,0]=rid in grid.hold
+        mask[0,0,-2,0,0,0]=rid in grid.hold
     #mask for the stay action
     if 'S' in action_choice:
-        mask[0,0,-1,0,0]=True
+        mask[0,0,-1,0,0,0]=True
 
    
     return mask.flatten()
-def int2actsim_norot(actionid,n_blocks,n_side_b,n_side_sup,maxblocks,n_reg,reverse=True):
+def complete_mask_norot(grid,block_choices,mask,n_blocks,n_side_b,n_side_sup,maxblocks,n_reg,reverse=False):
+    #remove all actions that would end up in a collision
+    possible_actions, = np.nonzero(mask)
+    for actionid in possible_actions:
+        action,action_params = int2actsim_norot(actionid,n_blocks,n_side_b,n_side_sup,maxblocks,n_reg,reverse=reverse)
+        if action == 'P':
+            mask[actionid],*_=grid.connect(block_choices[action_params['blocktypeid']],
+                                             bid=-2,
+                                             sideid=action_params['sideblock'],
+                                             support_sideid=action_params['sidesup'],
+                                             support_bid=action_params['bid_sup'],
+                                             side_ori=action_params['side_ori'],
+                                             idcon=action_params['idconsup'],
+                                             test=True)
+    return mask
+def int2actsim_norot(actionid,n_blocks,n_side_b,n_side_sup,maxblocks,n_reg,reverse=False):
     blockid, btype_sup, btype, side_sup, side_b,side_ori =np.unravel_index(actionid,
                                                               (maxblocks+n_reg,
                                                                n_side_sup.shape[0],
@@ -257,15 +282,15 @@ def int2actsim_norot(actionid,n_blocks,n_side_b,n_side_sup,maxblocks,n_reg,rever
                              'sidesup':side_sup,
                              'bid_sup':0,
                              'side_ori':side_ori,
-                             'idconsup':blockid,#always place the block on the second target
+                             'idconsup':blockid,
                               }
         else:
             action_params = {'blocktypeid':btype,
                              'sideblock':side_b,
                              'sidesup':side_sup,
-                             'bid_sup':blockid-n_reg,
+                             'bid_sup':blockid-n_reg+1,
                              'side_ori':side_ori,
-                             'idconsup':None,#always place the block on the second target
+                             'idconsup':None,
                               }
     return action,action_params
 def reward_simultaneous1(action, valid, closer, success,failure):
@@ -285,7 +310,20 @@ def reward_simultaneous1(action, valid, closer, success,failure):
         return reward - 0.1
     if action == 'S':
         return reward -0.1
-    
+def modular_reward(action,valid,closer,success,fail,config=None,n_sides = None, **kwargs):
+    if fail: 
+        return config['reward_failure']
+    reward =0
+    reward+=config['reward_action'][action]
+    if success:
+        reward+= config['reward_success']
+    if closer is not None and closer == 1:
+        reward+=config['reward_closer']
+    if n_sides is not None:
+        reward += config['reward_nsides']*np.sum(n_sides)
+        if not np.all(np.logical_xor(n_sides[:3],n_sides[3:])):
+            reward += config['reward_opposite_sides']
+    return reward
     
     
     

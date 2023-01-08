@@ -85,6 +85,7 @@ class ReplayDiscreteGymSupervisor():
                           draw=False,
                           buffer=None,
                           buffer_count=0,
+                          auto_leave = True,
                           ):
         use_mask = self.config['ep_use_mask']
         batch_size = self.config['ep_batch_size']
@@ -144,9 +145,20 @@ class ReplayDiscreteGymSupervisor():
                 if use_mask:
                     mask = self.agent.generate_mask(self.sim,(idr+1)%self.n_robots)
                 if valid:
-                    if np.all(self.sim.grid.min_dist < 1e-5) and np.all(self.sim.grid.hold==-1):
-                        success = True
-                        mask[:]=False
+                    if np.all(self.sim.grid.min_dist < 1e-5) and (auto_leave or np.all(self.sim.grid.hold==-1)):
+                        if auto_leave:
+                            bids = []
+                            for r in range(self.n_robots):
+                                bids.append(self.sim.leave(r))
+                            if self.sim.check():
+                                success = True
+                                mask[:]=False
+                            else:
+                                for r,bid in enumerate(bids):
+                                    self.sim.hold(r,bid)
+                        else:
+                            success = True
+                            mask[:]=False
                 else:
                     failure = True
                     #mark the state as terminal
@@ -260,15 +272,87 @@ class ReplayDiscreteGymSupervisor():
                     wandb.log({'succes_rate':success_rate})
             if anim is not None:
                 if self.use_wandb:
-                    wandb.log({'animation':wandb.Html(anim.to_jshtml())})
+                    if success:
+                        wandb.log({f'success_animation_gap_{gap}':wandb.Html(anim.to_jshtml())})
+                        gr.save_anim(anim,os.path.join(log_dir, f"success_animation_gap_{i}_ep{episode}"),ext='gif')
+                    else:
+                        wandb.log({'animation':wandb.Html(anim.to_jshtml())})
+                        
                 else:
-                    gr.save_anim(anim,os.path.join(log_dir, f"episode {episode}"),ext='gif')
+                    #gr.save_anim(anim,os.path.join(log_dir,'files','media', f"episode {episode}"),ext='gif')
                     gr.save_anim(anim,os.path.join(log_dir, f"episode {episode}"),ext='html')
                 
         if self.use_wandb:
             self.run.finish()
         return anim
-    
+    def exploit(self,gap,alterations=None,max_steps=30):
+        use_mask = self.config['ep_use_mask']
+        rewards_ar = np.zeros((self.n_robots,max_steps))
+        self.sim =copy.deepcopy(self.setup)
+        gap=gap
+                
+        tar = Block([[i,0,1] for i in range(self.sim.grid.shape[0]-gap-1)],muc=0.7)
+        self.sim.add_ground(tar,[0,0])
+        self.sim.add_ground(triangle,[self.sim.grid.shape[0]-1,0])
+        self.sim.setup_anim()
+        self.sim.add_frame()
+        
+        if use_mask:
+            mask = self.agent.generate_mask(self.sim,0)
+        else:
+            mask = None
+        success = False
+        failure = False
+        for step in range(max_steps):
+            for idr in range(self.n_robots):
+                if step == 8:
+                    pass
+                prev_state = {'grid':copy.deepcopy(self.sim.grid),'graph': copy.deepcopy(self.sim.graph),'mask':mask.copy(),'forces':copy.deepcopy(self.sim.ph_mod)}
+                action,action_args,*action_enc = self.agent.choose_action(idr,self.sim,mask=mask)
+                if alterations is not None and step in alterations[:,0] and idr in alterations[:,1]:
+                    mask[action_enc[0]]=False
+                    action,action_args,*action_enc = self.agent.choose_action(idr,self.sim,mask=mask)
+                    
+                valid,closer,blocktype,interfaces = self.agent.Act(self.sim,action,**action_args,draw=True)
+                if use_mask:
+                    mask = self.agent.generate_mask(self.sim,(idr+1)%self.n_robots)
+                if valid:
+                    if np.all(self.sim.grid.min_dist < 1e-5) and np.all(self.sim.grid.hold==-1):
+                        success = True
+                        mask[:]=False
+                else:
+                    failure = True
+                    #mark the state as terminal
+                    mask[:]=False
+                if step == max_steps-1 and idr == self.n_robots-1:
+                    #the end of the episode is reached
+                    mask[:]=False
+                    
+                    
+                    
+                if interfaces is not None:
+                    sides_id,n_sides_ori = np.unique(interfaces[:,0],return_counts=True)
+                    n_sides = np.zeros(6,dtype=int)
+                    n_sides[sides_id.astype(int)]=n_sides_ori
+                else:
+                    n_sides = None
+                
+                reward =self.rewardf(action, valid, closer, success,failure,n_sides=n_sides,config=self.config)
+                rewards_ar[idr,step]=reward
+                
+                action_args.pop('rid')
+                    
+                self.sim.draw_act(idr,action,blocktype,prev_state,**action_args)
+                self.sim.add_frame()
+                            
+                if success or failure:
+                    break
+            if success or failure:
+                break
+        
+        anim = self.sim.animate()
+        
+        return rewards_ar, anim
     def test(self,
              draw=True):
         from relative_single_agent import int2act_norot
@@ -410,7 +494,8 @@ if __name__ == '__main__':
             'reward_nsides': 0.1,
             'reward_success':1,
             'reward_opposite_sides':0,
-            #'gap_range':[1,3]
+            'opt_lower_bound_Vt':-2,
+            'gap_range':[0,1]
             }
     config_A2C = {'train_n_episodes':10000,
             'train_l_buffer':200,
@@ -433,14 +518,14 @@ if __name__ == '__main__':
             'opt_tau': 1e-3,
             'opt_weight_decay':0.0001,
             'opt_exploration_factor':0,
-            'agent_exp_strat':'softmax',
+            'agent_exp_strat':'epsilon-greedy',
             'agent_epsilon':0.05,
             'V_optimistic':False,
-            'reward_failure':-1,
+            'reward_failure':-2,
             'reward_action':{'Ph': -0.2, 'L':-0.1},
             'reward_closer':0.4,
-            'reward_nsides': 0.1,
-            'reward_success':1,
+            'reward_nsides': 0.05,
+            'reward_success':5,
             'reward_opposite_sides':0,
             #'gap_range':[1,3]
             }
@@ -450,10 +535,10 @@ if __name__ == '__main__':
     linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.7)
     #target = Block([[0,0,1],[1,0,1]])
     target = Block([[0,0,1]])
-    gym = ReplayDiscreteGymSupervisor(config_A2C,
-              agent_type=A2CSupervisor,
-              use_wandb=True,
-              actions= ['Ph','L'],
+    gym = ReplayDiscreteGymSupervisor(config,
+              agent_type=SACSupervisorSparse,
+              use_wandb=False,
+              actions= ['Ph'],
               block_type=[hexagon],
               random_targets='random_gap',
               targets_loc=[[2,0],[6,0]],

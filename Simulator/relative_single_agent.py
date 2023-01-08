@@ -89,7 +89,7 @@ class SupervisorRelativeSparse(SupervisorRelative):
                  block_choices,
                  config,
                  ground_block = None,
-                 action_choice = ['Pl','Ph','L'],
+                 action_choice = ['Ph','L'],
                  grid_size = [10,10],
                  max_blocks=30,
                  max_interfaces = 120,
@@ -124,7 +124,7 @@ class SupervisorRelativeSparse(SupervisorRelative):
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in [ground_block]+ block_choices])
             #check the genererate_mask_norot function to understand why these parameters
-            self.n_actions = n_robots*(1+len(block_choices))*(1+len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
+            self.n_actions = n_robots*(1+len(block_choices))*(int('L' in action_choice) +len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
         
         else:
             self.n_sides = [len(block.neigh) for block in block_choices]
@@ -472,35 +472,6 @@ class A2CSupervisor(SupervisorRelativeSparse):
         
         self.optimizer = im.A2CSharedOptimizer(self.model,config)
         
-    # def update_policy(self,buffer,buffer_count,batch_size,steps=1):
-    #     if buffer_count==0 or (self.model.batch_norm and buffer_count < 2):
-    #         return
-        
-    #     # _,_,nactions = self.choose_action(nstates,explore=False)
-       
-    #     #while loss > conv_tol:
-    #     for s in range(steps):
-    #         if buffer_count <buffer.shape[0]:
-    #             batch_size = np.clip(batch_size,0,buffer_count)
-    #             batch = np.random.choice(buffer[:buffer_count],batch_size,replace=False)
-    #         else:
-    #             batch = np.random.choice(np.delete(buffer,buffer_count%buffer.shape[0]),batch_size,replace=False)
-    #         #compute the state value using the target Q table
-    #         if self.use_mask:
-    #             states = [trans.state['grid'] for trans in batch]
-    #             nstates = [trans.new_state['grid'] for trans in batch]
-    #             mask = np.array([trans.state['mask'] for trans in batch])
-    #             nmask = np.array([trans.new_state['mask'] for trans in batch])
-                
-    #         else:
-    #             states = [trans.state['grid'] for trans in batch]
-    #             nstates = [trans.new_state['grid'] for trans in batch]
-    #             mask=None
-    #             nmask=None
-    #         actions = np.concatenate([trans.a[0] for trans in batch],axis=0)
-    #         rewards = np.array([[trans.r] for trans in batch],dtype=np.float32)
-            
-    #         l_v,l_p = self.optimizer.optimize(states,actions,rewards,nstates,self.gamma,mask,nmask=nmask)
     def choose_action(self,r_id,state,explore=True,mask=None):
         if mask is None:
             mask = np.zeros(self.n_actions,dtype=bool)
@@ -529,36 +500,16 @@ class A2CSupervisor(SupervisorRelativeSparse):
         else:
             action,action_params = int2act_sup(actionid,self.n_side,self.last_only,state.graph.n_blocks,self.max_blocks,self.action_choice)
         return action,action_params,actionid,actions_dist.entropy()
-    # def choose_action(self,r_id,state,explore=True,mask=None):
-    #     if mask is None:
-    #         mask = np.zeros(self.n_actions,dtype=bool)
-    #         mask[self.action_per_robot*r_id:self.action_per_robot*(1+r_id)]=True
-    #     if not isinstance(state,list):
-    #         state = [state.grid]
-    #     _,actions = self.model(state,inference = True,mask=mask)
-    #     if explore:
-    #         actionid = np.zeros(actions.shape[0],dtype=int)
-    #         for i,p in enumerate(actions.cpu().detach().numpy()):
-    #             actionid[i] = int(np.random.choice(self.n_actions,p=p))
-    #     else:
-    #         actionid = np.argmax(actions.cpu().detach().numpy(),axis=1)
-    #     if len(state)==1:
-    #         if actionid < 30:
-    #             pass
-    #         action,action_params = int2act_sup(actionid[0],self.n_side,self.last_only,np.max(state[0].occ),self.max_blocks)
-    #         return action,action_params,actionid
-    #     else:
-    #         return None,None,actionid
 def int2act_norot(action_id,n_block,n_robots, n_side_b,n_side_sup,last_only,max_blocks,action_choices):
     if last_only:
         rid, btype_sup, btype, side_sup, side_b,side_ori =np.unravel_index(action_id,
                                                                   (n_robots,
                                                                    n_side_sup.shape[0],
-                                                                   n_side_b.shape[0]+1,
+                                                                   n_side_b.shape[0]+int('L' in action_choices),
                                                                    np.max(n_side_sup),
                                                                    np.max(n_side_b),
                                                                    6))
-        if btype == n_side_b.shape[0]:
+        if 'L'in action_choices and btype == n_side_b.shape[0]:
             action = 'L'
             action_params = {'rid':rid,
                               }
@@ -732,9 +683,10 @@ def generate_mask_no_rot(state,rid,n_side_b, n_side_sup,last_only,max_blocks,n_r
         
     #get the ids of the feasible put actions (note that the are not all hidden)
     if last_only:
+        
         mask = np.zeros((n_robots,
                          n_side_sup.shape[0],
-                         n_side_b.shape[0]+1,
+                         n_side_b.shape[0]+int('L' in action_choices),
                          np.max(n_side_sup),
                          np.max(n_side_b),
                          6
@@ -746,7 +698,9 @@ def generate_mask_no_rot(state,rid,n_side_b, n_side_sup,last_only,max_blocks,n_r
             for k in range(6):
                 mask[rid,type_sup,i,:n_side_sup[type_sup,k],:n_side[k],k]=True
         #mask for the leave action
-        mask[rid,type_sup,-1,0,0]=rid in state.hold
+        if 'L' in action_choices:
+            mask[rid,type_sup,-1,0,0]=rid in state.hold
+            
     else:
         assert False, "not implemented"
         mask = np.zeros((n_robots,

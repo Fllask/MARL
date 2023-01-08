@@ -785,6 +785,7 @@ class SACSparseOptimizer():
         self.exploration_factor=config['opt_exploration_factor']
         self.entropy_penalty = config['opt_entropy_penalty']
         self.Qval_reduction = config['opt_Q_reduction']
+        self.lbound = config['opt_lower_bound_Vt']
         self.value_clip = config['opt_value_clip']
         self.opt_pol = torch.optim.NAdam(self.pol.parameters(),lr=lr*self.pol_over_val,weight_decay=wd)
         self.opt_Q = [torch.optim.NAdam(Q.parameters(),lr=lr,weight_decay=wd) for Q in self.Qs]
@@ -795,7 +796,7 @@ class SACSparseOptimizer():
         self.clip_r = 0.5 #same as in paper
         self.step = 0
         if self.pol.name !="":
-            self.name = self.pol.name+"_"
+            self.name = self.pol.name+"/"
         else:
             self.name = ""
     def optimize(self,state,actionid,rewards,nstates,gamma,mask=None,nmask=None,old_entropy =None):
@@ -821,13 +822,16 @@ class SACSparseOptimizer():
             tV = torch.mean(tV,dim=1)          
         #the entropy bonus is kept in the terminal state value, as its value has no upper bound
         tV[~torch.any(torch.tensor(nmask,device=self.pol.device),dim=1)]=F.relu(self.alpha)*self.target_entropy
+        
+        #clamp the target value 
+        tV = torch.clamp(tV,min=self.lbound)
         #update the critics
         losses = torch.zeros(2,device = self.pol.device)
         for i in range(2):
             self.opt_Q[i].zero_grad()
             
             sampled_Q = Qvals[i][torch.arange(Qvals[i].shape[0]),actionid]
-            loss = F.mse_loss(sampled_Q,(rewards+gamma*tV).detach())
+            loss = F.huber_loss(sampled_Q,(rewards+gamma*tV).detach())
             if self.value_clip:
                 target_sampled_Q = tQvals[i][torch.arange(Qvals[i].shape[0]),actionid]
                 loss_clipped = F.mse_loss(target_sampled_Q+torch.clamp(sampled_Q-target_sampled_Q,-self.clip_r,self.clip_r),
@@ -1188,13 +1192,13 @@ class A2CShared(nn.Module):
                     rep_pol = torch.flatten(self.state_encoder_pol(grids),1)
             for layer in self.FC_val:
                 rep_val = F.relu(layer(rep_val))
-            if self.batch_norm:
-                if rep_val.shape[0] > 1:
-                    val = self.out_val(self.val_norm(rep_val))
-                else:
-                    val = self.out_val(0*rep_val)
-            else:
-                val = self.out_val(rep_val)
+            # if self.batch_norm:
+            #     if rep_val.shape[0] > 1:
+            #         val = self.out_val(self.val_norm(rep_val))
+            #     else:
+            #         val = self.out_val(0*rep_val)
+            # else:
+            val = self.out_val(rep_val)
             for layer in self.FC_pol:
                 rep_pol = F.relu(layer(rep_pol))
             if mask is not None:
@@ -1247,8 +1251,6 @@ class A2CSharedOptimizer():
         advantage = Qval-v.detach()
         nll = -torch.log(1e-10+pol.probs[torch.arange(pol.probs.shape[0]),actionid])
         l_p = torch.mean(torch.unsqueeze(nll,1)*advantage)
-        if self.model.use_wandb:
-            wandb.log({'policy_entropy':entropy},step=self.step)
         l_p -= self.exploration_factor*entropy
         if self.model.shared:
             self.optimizer.zero_grad()
@@ -1278,7 +1280,8 @@ class A2CSharedOptimizer():
         self.target_model.load_state_dict(sd_target)
         if self.model.use_wandb:
             wandb.log({"l_v": l_v.detach().cpu().numpy(),
-                       "l_p": l_p.detach().cpu().numpy()},step=self.step)
+                       "l_p": l_p.detach().cpu().numpy(),
+                       'policy_entropy':entropy},step=self.step)
         #wandb.watch(self.model)
         self.step+=1
         return l_v.detach().cpu().numpy(), l_p.detach().cpu().numpy()

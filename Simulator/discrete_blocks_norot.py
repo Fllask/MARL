@@ -319,7 +319,7 @@ class Grid():
                 pos_ar = np.concatenate([pos_ar,pos])
                 ori_ar = np.concatenate([ori_ar,ori*np.ones(len(pos),dtype=int)])
         return (pos_ar,ori_ar)
-    def connect(self,block,bid,sideid,support_sideid,support_bid,side_ori,holder_rid=None,idcon=None):
+    def connect(self,block,bid,sideid,support_sideid,support_bid,side_ori,holder_rid=None,idcon=None,test=False):
         oriented_neigh = self.neighbours.reshape(self.neighbours.shape[0],self.neighbours.shape[1],6,2)
         
         supportside = np.array(np.nonzero((oriented_neigh[:,:,side_ori-3,0]==support_bid)&
@@ -346,6 +346,9 @@ class Grid():
             if np.any(self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]!=-1):
                 return False,None,None
             else:
+                if test:
+                    return True,None,None
+                
                 #add the block
                 self.occ[block.parts[:,0],block.parts[:,1],block.parts[:,2]]=bid
                 self.neighbours[block.neigh[:,0],block.neigh[:,1],block.neigh[:,2],block.neigh[:,3],0]=bid

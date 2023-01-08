@@ -24,10 +24,11 @@ class Transition():
         self.r = reward
         self.new_state = new_state
 class DiscreteSimulator():
-    def __init__(self,maxs,n_robots,block_choices,n_reg,maxblocks,maxinterface,n_sim_actions = 1):
+    def __init__(self,maxs,n_robots,block_choices,n_reg,maxblocks,maxinterface,n_sim_actions = 1,n_type_grounds=2):
         self.grid = Grid(maxs)
         self.max_block = maxblocks
-        self.type_id = -2*np.ones(maxblocks+2, dtype=int)#only allow one type of ground
+        self.type_id = -(n_type_grounds+1)*np.ones(maxblocks+n_reg, dtype=int)
+        self.empty_id = n_type_grounds+1
         self.max_interface = maxinterface
         self.blocks = block_choices
         self.graph = Graph(len(block_choices),
@@ -47,11 +48,11 @@ class DiscreteSimulator():
         self.prev = None
     def setup_anim(self,h=6):
         self.frames = []
-        self.fig,self.ax = gr.draw_grid(self.grid.occ.shape[:2],color='k',h=h)
-    def add_ground(self,block,pos):
+        self.fig,self.ax = gr.draw_grid(self.grid.occ.shape[:2],color='none',h=h)
+    def add_ground(self,block,pos,ground_type=0):
         valid,_,_=self.grid.put(block,pos,0,floating=True)
         assert valid, "Invalid target placement"
-        self.type_id[self.graph.n_ground]=-1
+        self.type_id[self.graph.n_ground]=-ground_type-1
         self.graph.add_ground(pos)
     def put(self,block,pos,blocktypeid=None):
         if self.nbid == self.max_block:
@@ -106,7 +107,7 @@ class DiscreteSimulator():
         
         if save:
             self.save()
-        self.type_id[bid]=-2
+        self.type_id[bid]=self.empty_id
         if bid == self.nbid-1:
             self.nbid -= 1
         self.grid.remove(bid)

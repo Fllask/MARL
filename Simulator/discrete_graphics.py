@@ -414,7 +414,7 @@ def write_state_OD(grid,h,linewidth = 0.5,alpha=0.5,scale=None):
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.axis('off')
-        ax.set_title(f'Channel: {channel}',fontsize = h*4.5)
+        ax.set_title(f'Channel: {channel}',fontsize = h*6)
         #draw the grid
         
         #draw the horizontal lines
@@ -466,7 +466,7 @@ def write_state_OI(grid,h,linewidth = 0.5,alpha=0.5,scale=None):
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.axis('off')
-        ax.set_title(f'Channel: {channel}',fontsize=h*1.5)
+        ax.set_title(f'Channel: {channel}',fontsize=h*2)
         #draw the grid
         
         #draw the horizontal lines
