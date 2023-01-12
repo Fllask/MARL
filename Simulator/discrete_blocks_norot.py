@@ -19,8 +19,8 @@ class Graph():
         self.n_nodes = n_reg+maxblocks
         self.mblock = maxblocks
         self.minter = maxinterface
-        self.blocks = np.zeros((maxblocks,4),int)
-        self.grounds = np.zeros((n_reg,4),int)
+        self.blocks = np.zeros((maxblocks,4))
+        self.grounds = np.zeros((n_reg,4))
         self.robots = np.zeros((n_robot,4),int)
         self.edges_index_bb = np.zeros((2,maxinterface),int)
         self.edges_index_bg = np.zeros((2,maxinterface_ground//2),int)
@@ -40,10 +40,10 @@ class Graph():
         self.n_interface_bg = 0
         self.n_interface_gb = 0
         #initialise the robot nodes 
-    def add_ground(self,pos):
+    def add_ground(self,pos,ground_type):
         #note: it is assumed that all the grounds have are the same block 
         assert self.n_ground < self.n_reg, "Attempt to add more grounds than regions"
-        self.grounds[self.n_ground,:2]=-1
+        self.grounds[self.n_ground,:2]=-ground_type-1
         self.grounds[self.n_ground,2:]=[pos[0],pos[1]]
         self.active_grounds[self.n_ground]=True
         self.n_ground+=1
@@ -54,7 +54,7 @@ class Graph():
         self.active_blocks[self.n_blocks]=True
         self.n_blocks+=1
     def hold(self,bid,rid):
-        self.blocks[bid-1,:]=rid
+        self.blocks[bid-1,0]=rid
     def leave(self,rid):
         self.blocks[:,0]=-1
     def add_rel(self,bid1,bid2,ori1,side1,side2,connection1,connection2):

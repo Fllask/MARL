@@ -12,7 +12,8 @@ import numpy as np
 
 import discrete_graphics as gr
 from discrete_blocks_norot import discret_block_norot as Block, Grid,Graph
-from physics_scipy import stability_solver_discrete as ph
+from physics_scipy import stability_solver_discrete as ph, get_cm
+triangle = Block([[0,0,1]],muc=0.7)
 class Backup():
     def __init__(self,maxs):
         self.grid = Grid(maxs)
@@ -24,18 +25,33 @@ class Transition():
         self.r = reward
         self.new_state = new_state
 class DiscreteSimulator():
-    def __init__(self,maxs,n_robots,block_choices,n_reg,maxblocks,maxinterface,n_sim_actions = 1,n_type_grounds=2):
+    def __init__(self,maxs,n_robots,block_choices,n_reg,maxblocks,maxinterface,n_sim_actions = 1,ground_blocks=[triangle]):
         self.grid = Grid(maxs)
         self.max_block = maxblocks
-        self.type_id = -(n_type_grounds+1)*np.ones(maxblocks+n_reg, dtype=int)
-        self.empty_id = n_type_grounds+1
+        self.type_id = -(len(ground_blocks)+1)*np.ones(maxblocks+n_reg, dtype=int)
+        self.empty_id = -(len(ground_blocks)+1)
         self.max_interface = maxinterface
         self.blocks = block_choices
+        self.n_side_oriented = np.array([[np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
+                                          np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
+                                          np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),
+                                          np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
+                                          np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
+                                          np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),] for block in block_choices])
+        
+        self.n_side_oriented_sup = np.array([[np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==0)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==1)),
+                                              np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),
+                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
+                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
+                                              np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in ground_blocks + block_choices])
+        
         self.graph = Graph(len(block_choices),
                        	  n_robots,
                            n_reg,
                            maxblocks,
                            maxinterface,)
+
         #self.fullgraph = FullGraph(len(block_choices),
                               # n_robots,
                               # n_reg,
@@ -53,7 +69,7 @@ class DiscreteSimulator():
         valid,_,_=self.grid.put(block,pos,0,floating=True)
         assert valid, "Invalid target placement"
         self.type_id[self.graph.n_ground]=-ground_type-1
-        self.graph.add_ground(pos)
+        self.graph.add_ground(get_cm(block.parts),ground_type=ground_type)
     def put(self,block,pos,blocktypeid=None):
         if self.nbid == self.max_block:
             return False, None
@@ -64,7 +80,7 @@ class DiscreteSimulator():
         valid, closer,interfaces = self.grid.put(block, pos, self.nbid)
         
         if valid:
-            self.graph.add_block(blocktypeid, pos)
+            self.graph.add_block(blocktypeid, get_cm(block.parts))
             for (ori,side1,side2,bid1,bid2,con1,con2) in interfaces:
                 if self.ninterface == self.max_interface:
                     return False,None
@@ -81,11 +97,11 @@ class DiscreteSimulator():
         if blocktypeid is not None:
             block = self.blocks[blocktypeid]
         else:
-            blocktypeid = -1
+            blocktypeid = 0
           
         valid, closer,interfaces = self.grid.connect(block, self.nbid, idsideblock, idsidesup,idblocksup,side_ori,idcon=idconsup)
         if valid:
-            self.graph.add_block(blocktypeid, block.parts[0,:2])
+            self.graph.add_block(blocktypeid, get_cm(block.parts))
             #self.fullgraph.add_block(self.nbid, blocktypeid, block.parts[0,:2], block.rot)
             for (ori,side1,side2,bid1,bid2,con1,con2) in interfaces:
             
@@ -94,7 +110,7 @@ class DiscreteSimulator():
                 if not (valid1 and valid2):
                     return False,None,None
             self.ph_mod.add_block(self.grid,block,self.nbid)
-            self.type_id[self.nbid]=blocktypeid
+            self.type_id[self.graph.n_reg+self.nbid-1]=blocktypeid
             self.nbid+=1
         return valid,closer,interfaces
     def remove(self,bid,save=True):
@@ -164,17 +180,37 @@ class DiscreteSimulator():
         if res.status not in [0,2]:
             print("warning: error in the static solver. "+res.message)
         return res.status == 0
-    def add_frame(self):
+    def add_frame(self,draw_robots=False):
         '''add a frame to later animate the simulation'''
         self.frames.append(gr.fill_grid(self.ax, self.grid,animated=True,draw_hold=False,forces_bag=self.ph_mod))
-    def draw_act(self,rid,action,blocktype,prev_state=None,redraw_state=True,**action_params):
+        if draw_robots:
+            for i in range(self.graph.n_robot):
+                self.frames[-1]+=gr.draw_robot(self.ax, self.grid, i, [self.grid.shape[0]+1,-2])
+    def draw_act(self,rid,action,blocktype,prev_state=None,redraw_state=True,draw_robots=False,**action_params):
         if redraw_state:
             if prev_state is not None:
-                state =  gr.fill_grid(self.ax, prev_state['grid'],animated=True,draw_hold=False,forces_bag=prev_state['forces'])
+                act_grid = copy.deepcopy(prev_state['grid'])
+                act_forces_bag = copy.deepcopy(prev_state['forces'])
+                act_grid.hold[act_grid.hold==rid]=-1
+                act_forces_bag.leave_block(rid)
+                state =  gr.fill_grid(self.ax, act_grid,animated=True,draw_hold=False,forces_bag=act_forces_bag)
+                
             else:
                 state = gr.fill_grid(self.ax, self.grid,animated=True,draw_hold=False,forces_bag=self.ph_mod)
+                if draw_robots:
+                    for i in range(self.graph.n_robot):
+                        if i == rid:
+                            state+=gr.draw_robot(self.ax, self.grid, i, [self.grid.shape[0]+1,-2],dash='-')
+                        else:
+                            state+=gr.draw_robot(self.ax, self.grid, i, [self.grid.shape[0]+1,-2])
             if 'sideblock' in action_params.keys():
                 self.frames.append(state+gr.draw_action_rel(self.ax,rid,action,blocktype,prev_state['grid'],animated=True,**action_params))
+                if draw_robots:
+                    for i in range(self.graph.n_robot):
+                        if i == rid:
+                            self.frames[-1]+=gr.draw_robot(self.ax, act_grid, i, [self.grid.shape[0]+1,-2],dash='--',actuator_pos=get_cm(blocktype.parts))
+                        else:
+                            self.frames[-1]+=gr.draw_robot(self.ax, act_grid, i, [self.grid.shape[0]+1,-2])
             else:
                 self.frames.append(state+gr.draw_action(self.ax,rid,action,blocktype,animated=True,**action_params))
         else:

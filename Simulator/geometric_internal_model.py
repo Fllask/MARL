@@ -4,20 +4,24 @@ Created on Tue Dec 13 16:38:57 2022
 
 @author: valla
 """
+import os
 import networkx as nx
 import torch_geometric as pyg
 import torch
+import torch.nn.functional as F
+from torch.distributions.categorical import Categorical
 from torch_geometric.data import HeteroData,Batch
 from torch_geometric.utils import to_undirected,add_self_loops
 import torch_geometric.transforms as T
 import numpy as np
 import copy
 import wandb
+import networkx as nx
 class ReplayBufferSingleAgent():
-    def __init__(self,length,agent_params,fully_connected = False,device='cpu'):
+    def __init__(self,length,action_list,side_sup,side_b,fully_connected = False,device='cpu'):
         self.states =  [None]*length
         self.nstates =  [None]*length
-        self.actions=torch.zeros(length,2,device=device,dtype=torch.long)
+        self.actions=torch.zeros(length,device=device,dtype=torch.long)
         self.rewards = torch.zeros(length,device=device)
         self.is_terminal = torch.zeros(length,device = device, dtype=bool)
         self.counter = 0
@@ -26,9 +30,9 @@ class ReplayBufferSingleAgent():
         self.device = device
         self.fully_connected=fully_connected
         
-        self.agent_action_list =agent_params['action_list']
-        self.agent_sides_sup=agent_params['sides_sup']
-        self.agent_sides_b=agent_params['sides_b']
+        self.agent_action_list =action_list
+        self.agent_sides_sup=side_sup
+        self.agent_sides_b=side_b
         
     def push(self,rid,state,action,nstate,reward,terminal = False):
         #create an HeteroData object from a graph defined by an adjacency matrix
@@ -39,11 +43,13 @@ class ReplayBufferSingleAgent():
         else:
             self.states[self.counter]=create_sparse_graph(state,rid,self.agent_action_list,self.device,self.agent_sides_sup,self.agent_sides_b)
             self.states[self.counter].validate()
+            self.actions[self.counter]=action
+            self.rewards[self.counter]=reward
             if not terminal:
                 self.nstates[self.counter]=create_sparse_graph(nstate,rid,self.agent_action_list,self.device,self.agent_sides_sup,self.agent_sides_b)
                 self.nstates[self.counter].validate()
             else:
-                self.nstates[self.counter]=HeteroData()
+                self.nstates[self.counter]=create_sparse_graph(None,None,None,self.device,None,None,empty=True)
                 self.nstates[self.counter].validate()
                 self.is_terminal[self.counter]=True
         self.counter = self.counter+1
@@ -65,7 +71,7 @@ class ReplayBufferSingleAgent():
             idx = perm[:batchsize]
             
         states_minibatch = Batch.from_data_list([self.states[i] for i in idx])
-        nstates_minibatch = Batch.from_data_list([self.states[i] for i in idx])
+        nstates_minibatch = Batch.from_data_list([self.nstates[i] for i in idx])
         # if self.fully_connected:
         #     states_minibatch = states_batch.index_select(idx)
         #     nstates_minibatch = nstates_batch.index_select(idx)
@@ -77,12 +83,34 @@ class ReplayBufferSingleAgent():
         rewards_minibatch = self.rewards[idx]
         terminal_minibatch = self.is_terminal[idx]
         return (states_minibatch,actions_minibatch,nstates_minibatch,rewards_minibatch,terminal_minibatch)
-
-def create_sparse_graph(sim,robot_to_act,action_list,device,sides_sup,sides_b,last_only=True):
-        graph = HeteroData()
-        graph['ground'].x = torch.tensor(sim.graph.grounds[sim.graph.active_grounds,2:],device=device,dtype=torch.float) #features:[coords]
+def create_dense_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,oriented_sides_b,last_only=True,empty=False):
+    if empty:
+        graph['ground'].x = torch.zeros((0,3),device=device,dtype=torch.float)
+        graph['block'].x = torch.zeros((0,3),device=device,dtype=torch.float)
+        graph['robot'].x =  torch.zeros(0,6,device=device,dtype=torch.float)
+        graph['side_sup'].x = torch.zeros(0,2,device=device,dtype=torch.float)
+        graph['new_block'].x = torch.zeros(0,2,device=device,dtype=torch.float)
+        graph['ground','edge','ground'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['ground','edge','block'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['ground','edge','robot'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['ground','edge','side_sup'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['block','edge','block'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['block','edge','robot'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['block','edge','side_sup'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['side_sup','edge','new_block'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['new_block','edge','robot'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph['robot','holds','block'].edge_index =  torch.zeros((2,0),device=device,dtype=torch.long)
+        graph = T.AddSelfLoops()(graph)
+        graph = T.ToUndirected()(graph)
+        return graph
+    else:
+        graph['ground'].x = torch.tensor(np.hstack([np.expand_dims(-1-sim.type_id[(sim.type_id > sim.empty_id) & (sim.type_id <0)],1),
+                                         sim.graph.grounds[sim.graph.active_grounds,2:]]),device=device,dtype=torch.float) #features:[groundtype,coords]
         graph['block'].x = torch.tensor(sim.graph.blocks[sim.graph.active_blocks,1:],device=device,dtype=torch.float) # features:[btype,coords]
-        graph['robot'].x = torch.tensor(sim.ph_mod.last_res.x[:sim.ph_mod.nr*6].reshape(sim.ph_mod.nr,6),device=device,dtype=torch.float) #features: force applied
+        if sim.ph_mod.last_res is None or sim.ph_mod.last_res.x is None:
+            graph['robot'].x = torch.zeros((sim.ph_mod.nr,6),device=device,dtype=torch.float) #features: force applied
+        else:
+            graph['robot'].x = torch.tensor(sim.ph_mod.last_res.x[:sim.ph_mod.nr*6].reshape(sim.ph_mod.nr,6),device=device,dtype=torch.float) #features: force applied
         ng = graph['ground'].x.shape[0]
         nb = graph['block'].x.shape[0]
         
@@ -93,87 +121,220 @@ def create_sparse_graph(sim,robot_to_act,action_list,device,sides_sup,sides_b,la
                 
                 #6 nodes are created connected to each ground or block
             if last_only:
-                graph['side_ori'].x = torch.arange(6,device=device,dtype=torch.float).view(-1,1)
+                #
+                
+                placed_block_typeid = sim.type_id[sim.type_id > sim.empty_id]
+                if placed_block_typeid[-1]<0:
+                    type_sup = -placed_block_typeid[-1]-1
+                else:
+                    type_sup=placed_block_typeid[-1]-sim.empty_id-1
+                side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),2))
+                node_id = 0
+                for side_ori, n_sides in enumerate(oriented_sides_sup[type_sup]):
+                    side_sup[node_id:node_id+n_sides]=np.array([[side_ori]*n_sides,np.arange(n_sides)]).T
+                    node_id +=n_sides
+                graph['side_sup'].x = torch.tensor(side_sup,device = device,dtype=torch.float)
+                
                 if not np.any(sim.graph.active_blocks):
-                    graph['ground','action_desc','side_ori'].edge_index=torch.vstack([(sim.graph.n_ground-1)*torch.ones(6,dtype=torch.long,device=device),
-                                                                                      torch.arange(6,device=device)])
+                    graph['ground','edge','side_sup'].edge_index=torch.vstack([(sim.graph.n_ground-1)*torch.ones(graph['side_sup'].x.shape[0],dtype=torch.long,device=device),
+                                                                                      torch.arange(graph['side_sup'].x.shape[0],device=device)])
+                    graph['block','edge','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
                 else:
-                    graph['block','action_desc','side_ori'].edge_index=torch.vstack([(sim.graph.n_blocks-1)*torch.ones(6,dtype=torch.long,device=device),
-                                                                                     torch.arange(6,device=device)])
+                    graph['block','edge','side_sup'].edge_index=torch.vstack([(sim.graph.n_blocks-1)*torch.ones(graph['side_sup'].x.shape[0],dtype=torch.long,device=device),
+                                                                                     torch.arange(graph['side_sup'].x.shape[0],device=device)])
+                    graph['ground','edge','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
             else:
-                graph['side_ori'].x = torch.arange(6,device=device,dtype=torch.float).repeat(ng+nb).view(-1,1)
-                graph['ground','action_desc','side_ori'].edge_index=torch.vstack([torch.repeat_interleave(torch.arange(ng,device=device),6),
-                                                                                  torch.arange(6*ng,device=device)])
-                graph['block','action_desc','side_ori'].edge_index=torch.vstack([torch.repeat_interleave(torch.arange(nb,device=device),6),
-                                                                                 torch.arange(6*ng,6*(ng+nb),device=device)])
-            
-            graph['side_supid'].x = torch.zeros((0,1),device=device)
-            graph['new_block'].x = torch.zeros((0,2),device=device)#features: [blocktype, sideid]
-            graph['side_ori','action_desc','side_supid'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
-            graph['side_supid','action_desc','new_block'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
-            
-            
-            for i in range(graph['side_ori'].x.shape[0]):
-                ori = int(graph['side_ori'].x[i,0])
-                if i < 6*ng:
-                
-                    new_nodes = torch.arange(sides_sup[0,int(graph['side_ori'].x[i])]).unsqueeze(1)
+                node_id = 0
+                placed_block_typeid = sim.type_id[sim.type_id > sim.empty_id]
+                graph['ground','edge','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
+                graph['block','edge','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
+                graph['side_sup'].x = torch.zeros((0,2),device = device,dtype=torch.float)
+                ng=0
+                for sup_id, support in enumerate(placed_block_typeid):
+                    type_sup = support-sim.empty_id-1
+                    side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),2))
+                    side_id = 0
+                    for side_ori, n_sides in enumerate(oriented_sides_sup[type_sup]):
+                        side_sup[side_id:side_id+n_sides]=np.array([[side_ori]*n_sides,np.arange(n_sides)]).T
+                        side_id +=n_sides
                     
+                    side_sup = torch.tensor(side_sup,device = device,dtype=torch.float)
+                    
+                    if support<0:
+                        graph['ground','edge','side_sup'].edge_index=torch.hstack([graph['ground','edge','side_sup'].edge_index,
+                                                                                          torch.vstack([sup_id*torch.ones(side_sup.shape[0],dtype=torch.long,device=device),
+                                                                                                        torch.arange(graph['side_sup'].x.shape[0],graph['side_sup'].x.shape[0]+side_sup.shape[0],device=device)])])
+                        ng+=1
+                    else:
+                        graph['block','edge','side_sup'].edge_index=torch.hstack([graph['block','edge','side_sup'].edge_index,
+                                                                                          torch.vstack([(sup_id-ng)*torch.ones(side_sup.shape[0],dtype=torch.long,device=device),
+                                                                                                        torch.arange(graph['side_sup'].x.shape[0],graph['side_sup'].x.shape[0]+side_sup.shape[0],device=device)])])
+                    graph['side_sup'].x = torch.vstack([graph['side_sup'].x,side_sup])
+                    node_id+=side_sup.shape[0]
+            new_block = []
+            put_against = []
+            n_actions = 0
+            for blocktype in range(oriented_sides_b.shape[0]):
+                for node_id, side_ori in enumerate(graph['side_sup'].x[:,0]):
+                    new_block.append(np.hstack([blocktype*np.ones((oriented_sides_b[blocktype,int(side_ori)],1)),
+                                                np.arange(oriented_sides_b[blocktype,int(side_ori)]).reshape(-1,1)]))
+                    put_against.append(np.vstack([node_id*np.ones(oriented_sides_b[blocktype,int(side_ori)]),
+                                                  np.arange(n_actions,n_actions+oriented_sides_b[blocktype,int(side_ori)])]).reshape(2,-1))
+                    n_actions+=oriented_sides_b[blocktype,int(side_ori)]
+                                            
+            new_block = np.vstack(new_block)
+            graph['new_block'].x = torch.tensor(new_block,device = device,dtype=torch.float)#features: [blocktype, sideid]
+            
+            graph['side_sup','edge','new_block'].edge_index = torch.tensor(np.hstack(put_against),device = device,dtype=torch.long)
+            
+            graph['robot','edge','new_block'].edge_index = torch.vstack([robot_to_act*torch.ones(graph['new_block'].x.shape[0],device=device,dtype=torch.long),
+                                                                           torch.arange(graph['new_block'].x.shape[0],device=device)
+                                                                          ])
+            
+            bid_held, = np.nonzero(sim.graph.blocks[sim.graph.active_blocks][:,0]>-1)
+            graph['robot','holds','block'].edge_index = torch.vstack([
+                                                            torch.tensor(sim.graph.blocks[sim.graph.active_blocks][bid_held,0],device=device,dtype=torch.long),
+                                                            torch.tensor(bid_held,device=device)])
+            
+            graph['block','edge','block'].edge_index = torch.vstack([torch.arange(graph['block'].x.shape[0],device=device,dtype=torch.long).repeat(torch.arange(graph['block'].x.shape[0])),
+                                                                     torch.arange(graph['block'].x.shape[0],device=device,dtype=torch.long).repeat_interleave(torch.arange(graph['block'].x.shape[0]))
+                                                                     ])
+            
+            graph['ground','edge','block'].edge_index = torch.vstack([torch.arange(graph['ground'].x.shape[0],device=device,dtype=torch.long).repeat(torch.arange(graph['block'].x.shape[0])),
+                                                                     torch.arange(graph['block'].x.shape[0],device=device,dtype=torch.long).repeat_interleave(torch.arange(graph['ground'].x.shape[0]))
+                                                                     ])
+            graph['ground','edge','robot'].edge_index = torch.vstack([torch.arange(graph['ground'].x.shape[0],device=device,dtype=torch.long).repeat(torch.arange(graph['robot'].x.shape[0])),
+                                                                     torch.arange(graph['robot'].x.shape[0],device=device,dtype=torch.long).repeat_interleave(torch.arange(graph['ground'].x.shape[0]))
+                                                                     ])
+            graph['block','edge','robot'].edge_index = torch.vstack([torch.arange(graph['block'].x.shape[0],device=device,dtype=torch.long).repeat(torch.arange(graph['robot'].x.shape[0])),
+                                                                     torch.arange(graph['robot'].x.shape[0],device=device,dtype=torch.long).repeat_interleave(torch.arange(graph['block'].x.shape[0]))
+                                                                     ])
+            graph = T.AddSelfLoops()(graph)
+            graph = T.ToUndirected()(graph)
+            return graph
+            
+def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,oriented_sides_b,last_only=True,empty=False):
+        graph = HeteroData()
+        if empty:
+            graph['ground'].x = torch.zeros((0,3),device=device,dtype=torch.float)
+            graph['block'].x = torch.zeros((0,3),device=device,dtype=torch.float)
+            graph['robot'].x =  torch.zeros(0,6,device=device,dtype=torch.float)
+            graph['side_sup'].x = torch.zeros(0,2,device=device,dtype=torch.float)
+            graph['new_block'].x = torch.zeros(0,2,device=device,dtype=torch.float)
+            graph['block','touches','ground'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['block','touches','block'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['ground','touches','block'].edge_index= torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['side_sup','put_against','new_block'].edge_index= torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['ground','action_desc','side_sup'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['block','action_desc','side_sup'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['robot','choses','new_block'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['robot','holds','block'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['robot', 'reaches', 'block'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['robot', 'reaches', 'ground'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph['robot', 'communicate', 'robot'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
+            graph = T.AddSelfLoops()(graph)
+            graph = T.ToUndirected(merge=False)(graph)
+            return graph
+        
+        graph['ground'].x = torch.tensor(np.hstack([np.expand_dims(-1-sim.type_id[(sim.type_id > sim.empty_id) & (sim.type_id <0)],1),
+                                         sim.graph.grounds[sim.graph.active_grounds,2:]]),device=device,dtype=torch.float) #features:[groundtype,coords]
+        graph['block'].x = torch.tensor(sim.graph.blocks[sim.graph.active_blocks,1:],device=device,dtype=torch.float) # features:[btype,coords]
+        if sim.ph_mod.last_res is None or sim.ph_mod.last_res.x is None:
+            graph['robot'].x = torch.zeros((sim.ph_mod.nr,6),device=device,dtype=torch.float) #features: force applied
+        else:
+            graph['robot'].x = torch.tensor(sim.ph_mod.last_res.x[:sim.ph_mod.nr*6].reshape(sim.ph_mod.nr,6),device=device,dtype=torch.float) #features: force applied
+        ng = graph['ground'].x.shape[0]
+        nb = graph['block'].x.shape[0]
+        
+        
+        
+        if 'Ph' in action_list:
+            #define the action tree:
+                
+                #6 nodes are created connected to each ground or block
+            if last_only:
+                #
+                
+                placed_block_typeid = sim.type_id[sim.type_id > sim.empty_id]
+                if placed_block_typeid[-1]<0:
+                    type_sup = -placed_block_typeid[-1]-1
                 else:
-                    connected_block = graph['block','action_desc','side_ori'].edge_index[0,i-6*ng]
-                    block_type = graph['block'].x[connected_block,0]
-                    new_nodes = torch.arange(sides_sup[int(block_type+1),ori]).unsqueeze(1)
+                    type_sup=placed_block_typeid[-1]-sim.empty_id-1
+                side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),2))
+                node_id = 0
+                for side_ori, n_sides in enumerate(oriented_sides_sup[type_sup]):
+                    side_sup[node_id:node_id+n_sides]=np.array([[side_ori]*n_sides,np.arange(n_sides)]).T
+                    node_id +=n_sides
+                graph['side_sup'].x = torch.tensor(side_sup,device = device,dtype=torch.float)
+                
+                if not np.any(sim.graph.active_blocks):
+                    graph['ground','action_desc','side_sup'].edge_index=torch.vstack([(sim.graph.n_ground-1)*torch.ones(graph['side_sup'].x.shape[0],dtype=torch.long,device=device),
+                                                                                      torch.arange(graph['side_sup'].x.shape[0],device=device)])
+                    graph['block','action_desc','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
+                else:
+                    graph['block','action_desc','side_sup'].edge_index=torch.vstack([(sim.graph.n_blocks-1)*torch.ones(graph['side_sup'].x.shape[0],dtype=torch.long,device=device),
+                                                                                     torch.arange(graph['side_sup'].x.shape[0],device=device)])
+                    graph['ground','action_desc','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
+            else:
+                node_id = 0
+                placed_block_typeid = sim.type_id[sim.type_id > sim.empty_id]
+                graph['ground','action_desc','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
+                graph['block','action_desc','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
+                graph['side_sup'].x = torch.zeros((0,2),device = device,dtype=torch.float)
+                ng=0
+                for sup_id, support in enumerate(placed_block_typeid):
+                    type_sup = support-sim.empty_id-1
+                    side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),2))
+                    side_id = 0
+                    for side_ori, n_sides in enumerate(oriented_sides_sup[type_sup]):
+                        side_sup[side_id:side_id+n_sides]=np.array([[side_ori]*n_sides,np.arange(n_sides)]).T
+                        side_id +=n_sides
                     
-                new_edges = torch.vstack([i*torch.ones((1,new_nodes.shape[0]),device=device,dtype = torch.long),
-                                          graph['side_supid'].x.shape[0]+new_nodes.T])
-                graph['side_supid'].x = torch.vstack([graph['side_supid'].x,new_nodes])
-                graph['side_ori','action_desc','side_supid'].edge_index = torch.hstack([graph['side_ori','action_desc','side_supid'].edge_index,
-                                                                                        new_edges])
-                
-                for sidsup_node_idx in new_edges[1,:]:#ids of each new nodes
-                    for btype in range(sides_b.shape[0]):
-                        new_nodes = torch.hstack([btype*torch.ones((sides_b[btype,int(graph['side_ori'].x[i,0])],1),device=device),
-                                                  torch.arange(sides_b[btype,int(graph['side_ori'].x[i,0])]).view(-1,1)])
-                        new_edges = torch.vstack([sidsup_node_idx*torch.ones(new_nodes.shape[0],device=device,dtype = torch.long),
-                                                  graph['new_block'].x.shape[0]+torch.arange(new_nodes.shape[0])])
-                        
-                        graph['new_block'].x = torch.vstack([graph['new_block'].x,new_nodes])
-                        graph['side_supid','action_desc','new_block'].edge_index = torch.hstack([graph['side_supid','action_desc','new_block'].edge_index,
-                                                                                                 new_edges])
-                
-                
-                
-                
-                
-                
-            #graph['possible_new_block'].x  = torch.zeros((n_blocktype*(graph['blocks'].x.shape[0]+graph['grounds'].x.shape[0])*,0),device=device) #n_nodes: ntype_b, features: []
+                    side_sup = torch.tensor(side_sup,device = device,dtype=torch.float)
+                    
+                    if support<0:
+                        graph['ground','action_desc','side_sup'].edge_index=torch.hstack([graph['ground','action_desc','side_sup'].edge_index,
+                                                                                          torch.vstack([sup_id*torch.ones(side_sup.shape[0],dtype=torch.long,device=device),
+                                                                                                        torch.arange(graph['side_sup'].x.shape[0],graph['side_sup'].x.shape[0]+side_sup.shape[0],device=device)])])
+                        ng+=1
+                    else:
+                        graph['block','action_desc','side_sup'].edge_index=torch.hstack([graph['block','action_desc','side_sup'].edge_index,
+                                                                                          torch.vstack([(sup_id-ng)*torch.ones(side_sup.shape[0],dtype=torch.long,device=device),
+                                                                                                        torch.arange(graph['side_sup'].x.shape[0],graph['side_sup'].x.shape[0]+side_sup.shape[0],device=device)])])
+                    graph['side_sup'].x = torch.vstack([graph['side_sup'].x,side_sup])
+                    node_id+=side_sup.shape[0]
+            new_block = []
+            put_against = []
+            n_actions = 0
+            for blocktype in range(oriented_sides_b.shape[0]):
+                for node_id, side_ori in enumerate(graph['side_sup'].x[:,0]):
+                    new_block.append(np.hstack([blocktype*np.ones((oriented_sides_b[blocktype,int(side_ori)],1)),
+                                                np.arange(oriented_sides_b[blocktype,int(side_ori)]).reshape(-1,1)]))
+                    put_against.append(np.vstack([node_id*np.ones(oriented_sides_b[blocktype,int(side_ori)]),
+                                                  np.arange(n_actions,n_actions+oriented_sides_b[blocktype,int(side_ori)])]).reshape(2,-1))
+                    n_actions+=oriented_sides_b[blocktype,int(side_ori)]
+                                            
+            new_block = np.vstack(new_block)
+            graph['new_block'].x = torch.tensor(new_block,device = device,dtype=torch.float)#features: [blocktype, sideid]
             
+            graph['side_sup','put_against','new_block'].edge_index = torch.tensor(np.hstack(put_against),device = device,dtype=torch.long)
             
             graph['robot','choses','new_block'].edge_index = torch.vstack([robot_to_act*torch.ones(graph['new_block'].x.shape[0],device=device,dtype=torch.long),
                                                                            torch.arange(graph['new_block'].x.shape[0],device=device)
                                                                           ])
+            
         if 'L' in action_list:
+            assert False, 'not implemented'
             graph['leave'].x = torch.zeros(1,0)#features: []
             graph['robot','choses','leave'].edge_index = torch.tensor([robot_to_act,0],device=device).unsqueeze(1) #features: []
             
         bid_held, = np.nonzero(sim.graph.blocks[sim.graph.active_blocks][:,0]>-1)
         graph['robot','holds','block'].edge_index = torch.vstack([
-                                                        torch.tensor(sim.graph.blocks[sim.graph.active_blocks][bid_held,0],device=device),
+                                                        torch.tensor(sim.graph.blocks[sim.graph.active_blocks][bid_held,0],device=device,dtype=torch.long),
                                                         torch.tensor(bid_held,device=device)]) #features: []
         graph['block','touches','block'].edge_index = torch.tensor(sim.graph.edges_index_bb[:,sim.graph.active_edges_bb],device=device,dtype=torch.long)
         graph['ground','touches','block'].edge_index = torch.tensor(sim.graph.edges_index_gb[:,sim.graph.active_edges_gb],device=device,dtype=torch.long)
         graph['block','touches','ground'].edge_index = torch.tensor(sim.graph.edges_index_bg[:,sim.graph.active_edges_bg],device=device,dtype=torch.long)
-        # graph['block','touches','block'].edge_attr = torch.tensor(sim.graph.i_a_bb[sim.graph.active_edges_bb],device = device,dtype=torch.float)
-        # graph['block','touches','ground'].edge_attr = torch.tensor(sim.graph.i_a_bg[sim.graph.active_edges_bg],device = device,dtype=torch.float)
-        # graph['ground','touches','block'].edge_attr = torch.tensor(sim.graph.i_a_gb[sim.graph.active_edges_gb],device = device,dtype=torch.float)
-        
-        # graph['possible_new_block','put_on','block'].edge_index = torch.vstack(
-        #                                                 [torch.arange(n_blocktype,device=device).repeat(graph['block'].x.shape[0]),
-        #                                                  torch.repeat_interleave(torch.arange(graph['block'].x.shape[0],device=device),n_blocktype)])
-        # graph['possible_new_block','put_on','ground'].edge_index =  torch.vstack(
-        #                                                 [torch.arange(n_blocktype,device=device).repeat(ng),
-        #                                                  torch.repeat_interleave(torch.arange(ng,device=device),n_blocktype)])#features: [side_ori, sup_side_id, side_id]
-        # #features: [side_ori, sup_side_id, side_id]
         
         graph['robot','reaches', 'block'].edge_index = torch.vstack([torch.arange(graph['robot'].x.shape[0],device=device).repeat(graph['block'].x.shape[0]),
                                                           torch.repeat_interleave(torch.arange(graph['block'].x.shape[0],device=device),graph['robot'].x.shape[0])]) #features: []
@@ -182,19 +343,25 @@ def create_sparse_graph(sim,robot_to_act,action_list,device,sides_sup,sides_b,la
         graph['robot','communicate','robot'].edge_index=torch.vstack([torch.arange(graph['robot'].x.shape[0],device=device).repeat(graph['robot'].x.shape[0]),
                                                           torch.repeat_interleave(torch.arange(graph['robot'].x.shape[0],device=device),graph['robot'].x.shape[0])]) #features: []
         graph = T.AddSelfLoops()(graph)
-        graph = T.ToUndirected(merge=False)(graph)
+        graph = T.ToUndirected()(graph)
         return graph
-def build_hetero_GNN(config,sample_data=None):
-    if config['GNN_arch']=='GATskip':
-        model =  pyg.nn.to_hetero(GeometricNN(config),sample_data.metadata())
-        if sample_data is not None:
-            with torch.no_grad():  # Initialize lazy modules.
-                out = model(sample_data.x_dict, sample_data.edge_index_dict)
+def build_hetero_GNN(config,simulator,rid,action_list,sides_sup,sides_b, empty=False):
+    sample_data = create_sparse_graph(simulator,rid,action_list,config['torch_device'],sides_sup,sides_b,last_only=False)
+    if config['GNN_arch']=='ResNet':
+        model =  pyg.nn.to_hetero_with_bases(GATskip(config),sample_data.metadata(),5,
+                                             in_channels = {'x':16},debug=False).to(config['torch_device'])
+       
+    elif config['GNN_arch']=='GAT':
+        model = pyg.nn.to_hetero_with_bases(pyg.nn.GAT(-1, config['GNN_hidden_dim'], config['GNN_n_layers'], 1,v2 =True),sample_data.metadata(),5,
+                                            in_channels = {'x':16}).to(config['torch_device'])
+        
     else:
         assert False, "Not implemented"
-    
-    return model.to(device=config['torch_device'])
-class GeometricNN(torch.nn.Module):
+    if sample_data is not None:
+        with torch.no_grad():  # Initialize lazy modules.
+            out = model(sample_data.x_dict, sample_data.edge_index_dict)
+    return model
+class GATskip(torch.nn.Module):
     def __init__(self,
                  config,
                  use_wandb=False):
@@ -204,76 +371,116 @@ class GeometricNN(torch.nn.Module):
         internal_dims = config['GNN_hidden_dim']
         n_heads = config['GNN_att_head']
         device = config['torch_device']
-        self.convs = torch.nn.ModuleList([pyg.nn.GATv2Conv((-1, -1), internal_dims, edge_dim=-1,add_self_loops=False,heads = n_heads) for i in range(n_layers-1)])
-        self.lins =  torch.nn.ModuleList([pyg.nn.Linear(-1, internal_dims) for i in range(n_layers-1)])
-        self.conv_out = pyg.nn.GATv2Conv((-1, -1), 1,edge_dim=-1, add_self_loops=False)
-        self.lin_out = pyg.nn.Linear(-1, 1)
+        self.convs = torch.nn.ModuleList([pyg.nn.ResGatedGraphConv((-1, -1), internal_dims, edge_dim=-1,add_self_loops=False,heads = n_heads) for i in range(n_layers-1)])
+        self.conv_out = pyg.nn.ResGatedGraphConv((-1, -1), 1,edge_dim=-1, add_self_loops=False)
         self.use_wandb=use_wandb
         
     def forward(self, x, edge_index):
-        for conv,lin in zip(self.convs,self.lins):
-            x = conv(x, edge_index)+lin(x)
+        for conv in self.convs:
+            x = conv(x, edge_index)
             x=x.relu()
-        x = self.conv_out(x,edge_index)+self.lin_out(x)
+        x = self.conv_out(x,edge_index)
         
         return x
-    
+# class GAT(torch.nn.Module):
+#     def __init__(self,
+#                  config,
+#                  use_wandb=False):
+#         super().__init__()
+#         #unpck the config
+#         n_layers = config['GNN_n_layers']
+#         internal_dims = config['GNN_hidden_dim']
+#         n_heads = config['GNN_att_head']
+#         device = config['torch_device']
+#         self.convs = torch.nn.ModuleList([pyg.nn.ResGatedGraphConv((-1, -1), internal_dims, edge_dim=-1,add_self_loops=False,heads = n_heads) for i in range(n_layers-1)])
+#         self.conv_out = pyg.nn.GATv2Conv((-1, -1), 1,edge_dim=-1, add_self_loops=False)
+#         self.use_wandb=use_wandb
+        
+#     def forward(self, x, edge_index):
+#         for conv in self.convs:
+#             x = conv(x, edge_index)
+#             x=x.relu()
+#         x = self.conv_out(x,edge_index)
+        
+#         return x
 class SACOptimizerGeometricNN():
-    def __init__(self,policy,config,use_wandb=False):
+    def __init__(self,simulator,rid,action_list,sides_sup,sides_b,policy,config,use_wandb=False,log_freq =None):
         self.use_wandb = use_wandb
         self.pol = policy
-        self.log_freq = self.pol.log_freq
-        self.Qs = [build_hetero_GNN(config)
+        self.log_freq = log_freq
+        self.Qs = [build_hetero_GNN(config,simulator,rid,action_list,sides_sup,sides_b)
                   for i in range(2)]
-        self.target_Qs = copy.deepcopy(self.Qs)
-        self.target_Qs.eval()
         
+        self.target_Qs = copy.deepcopy(self.Qs)
         lr = config['opt_lr']
         wd = config['opt_weight_decay']
         self.max_norm = config['opt_max_norm']
         self.pol_over_val = config['opt_pol_over_val']
         self.tau = config['opt_tau']
         self.exploration_factor=config['opt_exploration_factor']
-        self.entropy_penalty = config['opt_entropy_penalty']
         self.Qval_reduction = config['opt_Q_reduction']
+        self.lbound = config['opt_lower_bound_Vt']
         self.value_clip = config['opt_value_clip']
-        self.last_only = config['agent_last_only']
         self.opt_pol = torch.optim.NAdam(self.pol.parameters(),lr=lr*self.pol_over_val,weight_decay=wd)
         self.opt_Q = [torch.optim.NAdam(Q.parameters(),lr=lr,weight_decay=wd) for Q in self.Qs]
         self.target_entropy = config['opt_target_entropy']
-        self.alpha = torch.tensor([1.],device = policy.device,requires_grad=True)
+        self.alpha = torch.tensor([1.],device = config['torch_device'],requires_grad=True)
         self.opt_alpha = torch.optim.NAdam([self.alpha],lr=1e-3)
         self.beta = 0.5 #same as in paper
         self.clip_r = 0.5 #same as in paper
         self.step = 0
-        if self.pol.name is not None and self.pol.name !="":
-            self.name = self.pol.name+"_"
-        else:
-            self.name = ""
-    def optimize(self,state,actionid,rewards,nstates,gamma,mask=None,nmask=None,old_entropy =None):
-        rewards = torch.tensor(rewards,device=self.pol.device).squeeze()
-        feats_pol = self.pol(state.x_dict(),state.edge_index_dict())
-        #logits = 
-        Qvals = [self.Qs[i](state.x_dict(),state.edge_index_dict()) for i in range(2)]
-        with torch.inference_mode():
-            tQvals = [self.target_Qs[i](nstates) for i in range(2)]
+        self.name = ''
+        self.device = config['torch_device']
+    def optimize(self,state,actionid,rewards,nstate,terminal,gamma):
+        state = state.to(self.device)
+        nstate = nstate.to(self.device)
+        actionid = actionid.to(self.device)
+        rewards = rewards.to(self.device)
+        terminal = terminal.to(self.device)
+        batches,n_actions = torch.unique(state['new_block'].batch,return_counts=True)
+        batch_size = actionid.shape[0]
         
-        nfeats = self.pol(nstates,mask=nmask,inference=True)
-        entropy = dist.entropy()
-        nentropy = ndist.entropy()
-        tV = torch.stack([(ndist.probs*tQval).sum(dim=1)+F.relu(self.alpha)*nentropy for tQval in tQvals],dim=1)
-        if self.Qval_reduction == 'min':
-            tV, _ = torch.min(tV,dim=1)
-        elif self.Qval_reduction == 'mean':
-            tV = torch.mean(tV,dim=1)          
-        tV[~torch.any(torch.tensor(nmask,device=self.pol.device),dim=1)]=0
+        pol_graph = self.pol(state.x_dict,state.edge_index_dict)
+        prob = pyg.utils.softmax(pol_graph['new_block'],index = state['new_block'].batch)
+        
+        Qvals = [self.Qs[i](state.x_dict,state.edge_index_dict)['new_block'] for i in range(2)]
+            
+        entropy = (-prob*torch.log(prob+1e-30)).sum()/batch_size
+        
+        tV = F.relu(self.alpha)*self.target_entropy*torch.ones(batch_size,device = self.device,dtype=torch.float)
+        with torch.no_grad():
+            if nstate['new_block'].x.shape[0] >0:
+                nonterminal, inv =  torch.unique(nstate['new_block'].batch,return_inverse=True)
+                npol_graph = self.pol(nstate.x_dict,nstate.edge_index_dict)
+                nprob = pyg.utils.softmax(npol_graph['new_block'],index = nstate['new_block'].batch)
+                nentropy = (-nprob*torch.log(nprob+1e-30)).sum()/torch.unique(nstate['new_block'].batch).shape[0]
+                tQvals = [self.target_Qs[i](nstate.x_dict,nstate.edge_index_dict)['new_block'] for i in range(2)]
+                tV_double=[]
+                for tQval in tQvals:
+                    tVi = torch.zeros(nonterminal.shape,device=self.device)
+                    tVi.scatter_(0,inv, (nprob*tQval).squeeze(),reduce='add')
+                    tV_double.append(tVi+F.relu(self.alpha)*nentropy)
+                tV_double = torch.stack(tV_double,dim=1)
+            
+                if self.Qval_reduction == 'min':
+                    tV[nonterminal],_=torch.min(tV_double,dim=1)
+                elif self.Qval_reduction == 'mean':
+                    assert False, 'not implemented'
+                    tV = torch.mean(tV_double,dim=1)          
+        #the entropy bonus is kept in the terminal state value, as its value has no upper bound
+        
+        
+        #clamp the target value 
+        tV = torch.clamp(tV,min=self.lbound)
         #update the critics
-        losses = torch.zeros(2,device = self.pol.device)
+        losses = torch.zeros(2,device = self.device)
+        mean_sampled_Qs = torch.zeros(2,device = self.device)
         for i in range(2):
             self.opt_Q[i].zero_grad()
             
-            sampled_Q = Qvals[i][torch.arange(Qvals[i].shape[0]),actionid]
-            loss = F.mse_loss(sampled_Q,(rewards+gamma*tV).detach())
+            sampled_Q = Qvals[i][state['new_block'].ptr[:-1]+actionid].squeeze()
+            mean_sampled_Qs[i] = sampled_Q.mean()
+            loss = F.huber_loss(sampled_Q,(rewards+gamma*tV).detach())
             if self.value_clip:
                 target_sampled_Q = tQvals[i][torch.arange(Qvals[i].shape[0]),actionid]
                 loss_clipped = F.mse_loss(target_sampled_Q+torch.clamp(sampled_Q-target_sampled_Q,-self.clip_r,self.clip_r),
@@ -288,11 +495,12 @@ class SACOptimizerGeometricNN():
         else:
             minQvals = torch.mean(torch.stack(Qvals,dim=1),dim=1)
         _,argmax= torch.max(minQvals,dim=1)
-        l_p = (-F.relu(self.alpha)*entropy-(minQvals.detach()*dist.probs).sum(dim=1)).mean()
-        if self.entropy_penalty:
-            l_p += self.beta*F.mse_loss(entropy,old_entropy.squeeze())
+        l_p = (-F.relu(self.alpha)*entropy-(minQvals.detach()*prob).sum(dim=1)).mean()
+        
         self.opt_pol.zero_grad()
         l_p.backward()
+        if self.max_norm is not None:
+            norm_p = torch.nn.utils.clip_grad_norm_(self.pol.parameters(),self.max_norm)
         self.opt_pol.step()
         #update alpha
         l_alpha = (entropy.detach().mean()-self.target_entropy)*F.elu(self.alpha)
@@ -307,13 +515,15 @@ class SACOptimizerGeometricNN():
             for key in sd_target:
                 sd_target[key]= (1-self.tau)*sd_target[key]+self.tau*sd[key]
             self.target_Qs[i].load_state_dict(sd_target)
+        #print(f"total: {t11-t00}")
         if self.use_wandb and self.step % self.log_freq == 0:
             
             wandb.log({self.name+"l_p": l_p.detach().cpu().numpy(),
                        self.name+"rewards":rewards.detach().mean().cpu().numpy(),
                        self.name+"best_action": argmax,
-                       self.name+"Qval_0":Qvals[0][torch.arange(Qvals[0].shape[0]),actionid].detach().mean().cpu().numpy(),
-                       self.name+"Qval_1":Qvals[1][torch.arange(Qvals[1].shape[0]),actionid].detach().mean().cpu().numpy(),
+                       self.name+"Qval_0":mean_sampled_Qs[0].detach().cpu().numpy(),
+                       self.name+"Qval_1":mean_sampled_Qs[1].detach().cpu().numpy(),
+                       self.name+'policy_grad_norm':norm_p.detach().cpu().numpy(),
                        self.name+"V_target":tV.detach().mean().cpu().numpy(),
                        self.name+'policy_entropy':entropy.detach().mean().cpu().numpy(),
                        self.name+"Qloss_0":losses[0].detach().cpu().numpy(),
@@ -324,7 +534,14 @@ class SACOptimizerGeometricNN():
             #wandb.watch(self.model)
         self.step+=1
         return l_p.detach().cpu().numpy()
-
+    def save(self,log_dir,name):
+        torch.save(self.pol.state_dict(),os.path.join(log_dir,f'{name}_pol.h5'))
+        [torch.save(self.Qs[i].state_dict(),os.path.join(log_dir,f'{name}_Q_{i}.h5')) for i in range(2)]
+        [torch.save(self.target_Qs[i].state_dict(),os.path.join(log_dir,f'{name}_targetQ_{i}.h5')) for i in range(2)]
+        torch.save(self.alpha,os.path.join(log_dir,f'{name}_alpha.h5'))
+        torch.save(self.opt_alpha.state_dict(),os.path.join(log_dir,f'{name}_opt_alpha.h5'))
+        torch.save(self.opt_pol.state_dict(),os.path.join(log_dir,f'{name}_opt_pol.h5'))
+        [torch.save(self.opt_Q[i].state_dict(),os.path.join(log_dir,f'{name}_opt_Q_{i}.h5')) for i in range(2)]
 class GAT(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels):
         super().__init__()

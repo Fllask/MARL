@@ -88,7 +88,7 @@ class SupervisorRelativeSparse(SupervisorRelative):
                  n_robots,
                  block_choices,
                  config,
-                 ground_block = None,
+                 ground_blocks = None,
                  action_choice = ['Ph','L'],
                  grid_size = [10,10],
                  max_blocks=30,
@@ -122,7 +122,7 @@ class SupervisorRelativeSparse(SupervisorRelative):
                                                   np.sum((block.neigh[:,2]==1) & (block.neigh[:,3]==2)),
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==0)),
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
-                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in [ground_block]+ block_choices])
+                                                  np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in ground_blocks+ block_choices])
             #check the genererate_mask_norot function to understand why these parameters
             self.n_actions = n_robots*(1+len(block_choices))*(int('L' in action_choice) +len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
         
@@ -385,7 +385,7 @@ class SACSupervisorSparse(SupervisorRelativeSparse):
                  n_robots,
                  block_choices,
                  config,
-                 ground_block = None,
+                 ground_blocks = None,
                  action_choice = ['Pl','Ph','L'],
                  grid_size = [10,10],
                  max_blocks=30,
@@ -400,7 +400,7 @@ class SACSupervisorSparse(SupervisorRelativeSparse):
         super().__init__(n_robots,
                      block_choices,
                      config,
-                     ground_block = ground_block,
+                     ground_blocks = ground_blocks,
                      action_choice = action_choice,
                      grid_size = grid_size,
                      max_blocks=max_blocks,

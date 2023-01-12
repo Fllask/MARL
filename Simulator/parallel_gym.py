@@ -169,7 +169,6 @@ class ReplayDiscreteGymSupervisor():
             buffer = np.empty(self.config['train_l_buffer'],dtype = object)
             buffer_count=0
         print("Training started")
-        for sim in sims:
             
         return anim
     

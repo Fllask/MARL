@@ -21,16 +21,16 @@ def create_gym(config):
     gym = Gym(config_sparse_SAC,
               agent_type=SACSupervisorSparse,
               use_wandb=False,
-              actions= ['Ph','L'],
+              actions= ['Ph'],
               block_type=[hexagon,linkr,linkl,linkh],
               random_targets='random_gap',
               n_robots=2,
               max_blocks = 100,
-              targets=[target]*2,
+              targets=[target],
               targets_loc = [[5,0],[23,0]],
               max_interfaces = 300,
               log_freq = 50,
-              maxs = [30,15])
+              maxs = [30,20])
     return gym
 def load_agent(file,gym,explore=False):
     
@@ -78,12 +78,13 @@ if __name__ == "__main__":
             'reward_nsides': 0.05,
             'reward_success':5,
             'reward_opposite_sides':0,
+            'opt_lower_bound_Vt':2,
             'gap_range': [1,20],
             }
     gym = create_gym(config_sparse_SAC)
-    gym = load_agent("best_so_far.pickle",gym)
-    #alterations=None
-    alterations=np.array([[0,0],[6,0],[6,1],[8,0],[8,1]])
-    rewards, anim = gym.exploit(11,alterations= alterations)
+    gym = load_agent("newbestlater.pickle",gym)
+    alterations=None
+    alterations=np.array([[8,0]])
+    rewards, anim = gym.exploit(13,alterations= alterations,n_alter=0,h=12)
     gr.save_anim(anim,"exploit",ext='html')
     gr.save_anim(anim,"exploit",ext='gif')
