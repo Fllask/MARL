@@ -10,13 +10,14 @@ from discrete_blocks_norot import discret_block_norot as Block
 import pickle
 import discrete_graphics as gr
 import numpy as np
+import matplotlib.pyplot as plt
 def create_gym(config):
     
     #overwrite the action choice method:
-    hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
-    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7) 
-    linkl = Block([[0,0,0],[0,1,1],[1,0,0],[0,1,0],[0,0,1],[-1,1,1]],muc=0.7) 
-    linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.7)
+    hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.5)
+    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.5) 
+    linkl = Block([[0,0,0],[0,1,1],[1,0,0],[0,1,0],[0,0,1],[-1,1,1]],muc=0.5) 
+    linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.5)
     target = Block([[0,0,1]])
     gym = Gym(config_sparse_SAC,
               agent_type=SACSupervisorSparse,
@@ -82,9 +83,12 @@ if __name__ == "__main__":
             'gap_range': [1,20],
             }
     gym = create_gym(config_sparse_SAC)
-    gym = load_agent("newbestlater.pickle",gym)
+    gym = load_agent("1miosteps.pickle",gym,explore=False)
     alterations=None
-    alterations=np.array([[8,0]])
-    rewards, anim = gym.exploit(13,alterations= alterations,n_alter=0,h=12)
+    alterations=np.array([[5,0]])
+    rewards, anim = gym.exploit(17,alterations= alterations,n_alter=1,h=12,draw_robots=False)
     gr.save_anim(anim,"exploit",ext='html')
     gr.save_anim(anim,"exploit",ext='gif')
+    #name = 'struct8_a2'
+    #plt.savefig(f'../graphics/results/experiment 3/{name}.pdf')
+    #plt.savefig(f'../graphics/results/experiment 3/{name}.png')

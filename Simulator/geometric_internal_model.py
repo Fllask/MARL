@@ -16,11 +16,16 @@ import torch_geometric.transforms as T
 import numpy as np
 import copy
 import wandb
-import networkx as nx
 class ReplayBufferSingleAgent():
-    def __init__(self,length,action_list,side_sup,side_b,fully_connected = False,device='cpu'):
+    def __init__(self,length,action_list,side_sup,side_b,fully_connected = False,device='cpu',use_mask = False):
         self.states =  [None]*length
         self.nstates =  [None]*length
+        if use_mask:
+            self.masks =[None]*length
+            self.nmasks = [None]*length
+            self.use_mask = True
+        else:
+            self.use_mask = False
         self.actions=torch.zeros(length,device=device,dtype=torch.long)
         self.rewards = torch.zeros(length,device=device)
         self.is_terminal = torch.zeros(length,device = device, dtype=bool)
@@ -34,24 +39,31 @@ class ReplayBufferSingleAgent():
         self.agent_sides_sup=side_sup
         self.agent_sides_b=side_b
         
-    def push(self,rid,state,action,nstate,reward,terminal = False):
+    def push(self,rid,state,action,nstate,reward,terminal = False,mask=None,nmask=None,last_only=True):
         #create an HeteroData object from a graph defined by an adjacency matrix
         if self.fully_connected:
             assert False, "Not implemented"
             #self.states[self.counter]=DenseGraph(state)
             #self.nstates[self.counter]=DenseGraph(nstate)
         else:
-            self.states[self.counter]=create_sparse_graph(state,rid,self.agent_action_list,self.device,self.agent_sides_sup,self.agent_sides_b)
+            self.states[self.counter]=create_sparse_graph(state,rid,self.agent_action_list,self.device,self.agent_sides_sup,self.agent_sides_b,last_only=last_only)
             self.states[self.counter].validate()
+            if self.use_mask:
+                self.masks[self.counter]=torch.tensor(mask,device=self.device,dtype=bool)
+                if terminal:
+                    self.nmasks[self.counter]=torch.zeros(0,device=self.device,dtype=bool)
+                else:
+                    self.nmasks[self.counter]=torch.tensor(nmask,device=self.device,dtype=bool)
             self.actions[self.counter]=action
             self.rewards[self.counter]=reward
             if not terminal:
-                self.nstates[self.counter]=create_sparse_graph(nstate,rid,self.agent_action_list,self.device,self.agent_sides_sup,self.agent_sides_b)
+                self.nstates[self.counter]=create_sparse_graph(nstate,rid,self.agent_action_list,self.device,self.agent_sides_sup,self.agent_sides_b,last_only=last_only)
                 self.nstates[self.counter].validate()
             else:
-                self.nstates[self.counter]=create_sparse_graph(None,None,None,self.device,None,None,empty=True)
+                self.nstates[self.counter]=create_sparse_graph(None,None,self.agent_action_list,self.device,state.n_side_oriented_sup,state.n_side_oriented,empty=True,last_only=last_only)
                 self.nstates[self.counter].validate()
                 self.is_terminal[self.counter]=True
+            
         self.counter = self.counter+1
         if  self.counter==self.length:
             self.counter=0
@@ -82,8 +94,13 @@ class ReplayBufferSingleAgent():
         actions_minibatch = self.actions[idx]
         rewards_minibatch = self.rewards[idx]
         terminal_minibatch = self.is_terminal[idx]
+        if self.use_mask:
+            mask_minibatch = [self.masks[i] for i in idx]
+            nmask_minibatch = [self.nmasks[i] for i in idx]
+            return (states_minibatch,actions_minibatch,nstates_minibatch,rewards_minibatch,terminal_minibatch,mask_minibatch,nmask_minibatch)
         return (states_minibatch,actions_minibatch,nstates_minibatch,rewards_minibatch,terminal_minibatch)
 def create_dense_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,oriented_sides_b,last_only=True,empty=False):
+    graph = HeteroData()
     if empty:
         graph['ground'].x = torch.zeros((0,3),device=device,dtype=torch.float)
         graph['block'].x = torch.zeros((0,3),device=device,dtype=torch.float)
@@ -213,14 +230,14 @@ def create_dense_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,or
             graph = T.ToUndirected()(graph)
             return graph
             
-def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,oriented_sides_b,last_only=True,empty=False):
+def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,oriented_sides_b,last_only=True,empty=False,one_hot=False):
         graph = HeteroData()
         if empty:
-            graph['ground'].x = torch.zeros((0,3),device=device,dtype=torch.float)
-            graph['block'].x = torch.zeros((0,3),device=device,dtype=torch.float)
+            graph['ground'].x = torch.zeros((0,oriented_sides_sup.shape[0]-oriented_sides_b.shape[0]+2),device=device,dtype=torch.float)
+            graph['block'].x = torch.zeros((0,oriented_sides_b.shape[0]+2),device=device,dtype=torch.float)
             graph['robot'].x =  torch.zeros(0,6,device=device,dtype=torch.float)
-            graph['side_sup'].x = torch.zeros(0,2,device=device,dtype=torch.float)
-            graph['new_block'].x = torch.zeros(0,2,device=device,dtype=torch.float)
+            graph['side_sup'].x = torch.zeros(0,7,device=device,dtype=torch.float)
+            graph['new_block'].x = torch.zeros(0,oriented_sides_b.shape[0]+1+int('S' in action_list),device=device,dtype=torch.float)
             graph['block','touches','ground'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
             graph['block','touches','block'].edge_index = torch.zeros((2,0),device=device,dtype=torch.long)
             graph['ground','touches','block'].edge_index= torch.zeros((2,0),device=device,dtype=torch.long)
@@ -236,9 +253,16 @@ def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,o
             graph = T.ToUndirected(merge=False)(graph)
             return graph
         
-        graph['ground'].x = torch.tensor(np.hstack([np.expand_dims(-1-sim.type_id[(sim.type_id > sim.empty_id) & (sim.type_id <0)],1),
-                                         sim.graph.grounds[sim.graph.active_grounds,2:]]),device=device,dtype=torch.float) #features:[groundtype,coords]
-        graph['block'].x = torch.tensor(sim.graph.blocks[sim.graph.active_blocks,1:],device=device,dtype=torch.float) # features:[btype,coords]
+        type_grounds = -1-sim.type_id[(sim.type_id > sim.empty_id) & (sim.type_id <0)]
+        pos_grounds = sim.graph.grounds[sim.graph.active_grounds,2:]
+        graph['ground'].x = F.one_hot(torch.tensor(type_grounds,device=device,dtype=torch.long),oriented_sides_sup.shape[0]-oriented_sides_b.shape[0]+2).to(torch.float)
+        graph['ground'].x[:,-2:]=torch.tensor(pos_grounds,device=device)
+        
+        type_blocks = sim.graph.blocks[sim.graph.active_blocks,1]
+        pos_blocks = sim.graph.blocks[sim.graph.active_blocks,-2:]
+        graph['block'].x = F.one_hot(torch.tensor(type_blocks,device=device,dtype=torch.long),oriented_sides_b.shape[0]+2).to(torch.float)
+        graph['block'].x[:,-2:]=torch.tensor(pos_blocks,device=device)
+        
         if sim.ph_mod.last_res is None or sim.ph_mod.last_res.x is None:
             graph['robot'].x = torch.zeros((sim.ph_mod.nr,6),device=device,dtype=torch.float) #features: force applied
         else:
@@ -248,22 +272,22 @@ def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,o
         
         
         
-        if 'Ph' in action_list:
+        if ('Ph' in action_list) or ('P' in action_list):
             #define the action tree:
                 
                 #6 nodes are created connected to each ground or block
             if last_only:
                 #
-                
                 placed_block_typeid = sim.type_id[sim.type_id > sim.empty_id]
                 if placed_block_typeid[-1]<0:
                     type_sup = -placed_block_typeid[-1]-1
                 else:
                     type_sup=placed_block_typeid[-1]-sim.empty_id-1
-                side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),2))
+                side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),7))
                 node_id = 0
                 for side_ori, n_sides in enumerate(oriented_sides_sup[type_sup]):
-                    side_sup[node_id:node_id+n_sides]=np.array([[side_ori]*n_sides,np.arange(n_sides)]).T
+                    side_sup[node_id:node_id+n_sides,side_ori]=1
+                    side_sup[node_id:node_id+n_sides,-1]=np.arange(n_sides)
                     node_id +=n_sides
                 graph['side_sup'].x = torch.tensor(side_sup,device = device,dtype=torch.float)
                 
@@ -280,14 +304,15 @@ def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,o
                 placed_block_typeid = sim.type_id[sim.type_id > sim.empty_id]
                 graph['ground','action_desc','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
                 graph['block','action_desc','side_sup'].edge_index=torch.zeros((2,0),dtype=torch.long,device=device)
-                graph['side_sup'].x = torch.zeros((0,2),device = device,dtype=torch.float)
+                graph['side_sup'].x = torch.zeros((0,7),device = device,dtype=torch.float)
                 ng=0
                 for sup_id, support in enumerate(placed_block_typeid):
                     type_sup = support-sim.empty_id-1
-                    side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),2))
+                    side_sup = np.zeros((np.sum(oriented_sides_sup[type_sup]),7))
                     side_id = 0
                     for side_ori, n_sides in enumerate(oriented_sides_sup[type_sup]):
-                        side_sup[side_id:side_id+n_sides]=np.array([[side_ori]*n_sides,np.arange(n_sides)]).T
+                        side_sup[side_id:side_id+n_sides,side_ori]=1
+                        side_sup[side_id:side_id+n_sides,-1]=np.arange(n_sides)
                         side_id +=n_sides
                     
                     side_sup = torch.tensor(side_sup,device = device,dtype=torch.float)
@@ -307,9 +332,11 @@ def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,o
             put_against = []
             n_actions = 0
             for blocktype in range(oriented_sides_b.shape[0]):
-                for node_id, side_ori in enumerate(graph['side_sup'].x[:,0]):
-                    new_block.append(np.hstack([blocktype*np.ones((oriented_sides_b[blocktype,int(side_ori)],1)),
-                                                np.arange(oriented_sides_b[blocktype,int(side_ori)]).reshape(-1,1)]))
+                for node_id, side_ori in enumerate(torch.nonzero(graph['side_sup'].x[:,:-1])[:,1]):
+                    blocktype_oh = np.zeros((oriented_sides_b[blocktype,int(side_ori)],oriented_sides_b.shape[0]+1+int('S' in action_list)))
+                    blocktype_oh[:,blocktype]=1
+                    blocktype_oh[:,-1]=np.arange(oriented_sides_b[blocktype,int(side_ori)])
+                    new_block.append(blocktype_oh)
                     put_against.append(np.vstack([node_id*np.ones(oriented_sides_b[blocktype,int(side_ori)]),
                                                   np.arange(n_actions,n_actions+oriented_sides_b[blocktype,int(side_ori)])]).reshape(2,-1))
                     n_actions+=oriented_sides_b[blocktype,int(side_ori)]
@@ -319,10 +346,15 @@ def create_sparse_graph(sim,robot_to_act,action_list,device,oriented_sides_sup,o
             
             graph['side_sup','put_against','new_block'].edge_index = torch.tensor(np.hstack(put_against),device = device,dtype=torch.long)
             
-            graph['robot','choses','new_block'].edge_index = torch.vstack([robot_to_act*torch.ones(graph['new_block'].x.shape[0],device=device,dtype=torch.long),
-                                                                           torch.arange(graph['new_block'].x.shape[0],device=device)
-                                                                          ])
             
+        if 'S' in action_list:
+            #model S as a block only connected to the robot
+            stay_block = torch.zeros((1,oriented_sides_b.shape[0]+1+int('S' in action_list)),dtype=torch.float,device=device)
+            stay_block[0,-2]=1
+            graph['new_block'].x = torch.vstack([graph['new_block'].x,stay_block])
+        graph['robot','choses','new_block'].edge_index = torch.vstack([robot_to_act*torch.ones(graph['new_block'].x.shape[0],device=device,dtype=torch.long),
+                                                                       torch.arange(graph['new_block'].x.shape[0],device=device)
+                                                                      ])
         if 'L' in action_list:
             assert False, 'not implemented'
             graph['leave'].x = torch.zeros(1,0)#features: []
@@ -404,7 +436,7 @@ class GATskip(torch.nn.Module):
         
 #         return x
 class SACOptimizerGeometricNN():
-    def __init__(self,simulator,rid,action_list,sides_sup,sides_b,policy,config,use_wandb=False,log_freq =None):
+    def __init__(self,simulator,rid,action_list,sides_sup,sides_b,policy,config,use_wandb=False,log_freq =None,name=""):
         self.use_wandb = use_wandb
         self.pol = policy
         self.log_freq = log_freq
@@ -424,14 +456,15 @@ class SACOptimizerGeometricNN():
         self.opt_pol = torch.optim.NAdam(self.pol.parameters(),lr=lr*self.pol_over_val,weight_decay=wd)
         self.opt_Q = [torch.optim.NAdam(Q.parameters(),lr=lr,weight_decay=wd) for Q in self.Qs]
         self.target_entropy = config['opt_target_entropy']
-        self.alpha = torch.tensor([1.],device = config['torch_device'],requires_grad=True)
-        self.opt_alpha = torch.optim.NAdam([self.alpha],lr=1e-3)
+        
+        self.alpha = torch.tensor(config.get('opt_init_alpha') or 1.,device = config['torch_device'],requires_grad=True)
+        self.opt_alpha = torch.optim.NAdam([self.alpha],lr=config.get('opt_lr_alpha') or 1e-3)
         self.beta = 0.5 #same as in paper
         self.clip_r = 0.5 #same as in paper
         self.step = 0
-        self.name = ''
+        self.name = name
         self.device = config['torch_device']
-    def optimize(self,state,actionid,rewards,nstate,terminal,gamma):
+    def optimize(self,state,actionid,rewards,nstate,terminal,gamma,masks = None,nmasks=None):
         state = state.to(self.device)
         nstate = nstate.to(self.device)
         actionid = actionid.to(self.device)
@@ -441,8 +474,11 @@ class SACOptimizerGeometricNN():
         batch_size = actionid.shape[0]
         
         pol_graph = self.pol(state.x_dict,state.edge_index_dict)
-        prob = pyg.utils.softmax(pol_graph['new_block'],index = state['new_block'].batch)
-        
+        if masks is None:
+            prob = pyg.utils.softmax(pol_graph['new_block'],index = state['new_block'].batch)
+        else:
+            mask = torch.cat(masks)
+            prob = pyg.utils.softmax(pol_graph['new_block'][mask],index = state['new_block'].batch[mask])
         Qvals = [self.Qs[i](state.x_dict,state.edge_index_dict)['new_block'] for i in range(2)]
             
         entropy = (-prob*torch.log(prob+1e-30)).sum()/batch_size
@@ -452,13 +488,20 @@ class SACOptimizerGeometricNN():
             if nstate['new_block'].x.shape[0] >0:
                 nonterminal, inv =  torch.unique(nstate['new_block'].batch,return_inverse=True)
                 npol_graph = self.pol(nstate.x_dict,nstate.edge_index_dict)
-                nprob = pyg.utils.softmax(npol_graph['new_block'],index = nstate['new_block'].batch)
+                if nmasks is None:
+                    nprob = pyg.utils.softmax(npol_graph['new_block'],index = nstate['new_block'].batch)
+                else:
+                    nmask = torch.cat(nmasks)
+                    nprob = pyg.utils.softmax(npol_graph['new_block'][nmask],index = nstate['new_block'].batch[nmask])
                 nentropy = (-nprob*torch.log(nprob+1e-30)).sum()/torch.unique(nstate['new_block'].batch).shape[0]
                 tQvals = [self.target_Qs[i](nstate.x_dict,nstate.edge_index_dict)['new_block'] for i in range(2)]
                 tV_double=[]
                 for tQval in tQvals:
                     tVi = torch.zeros(nonterminal.shape,device=self.device)
-                    tVi.scatter_(0,inv, (nprob*tQval).squeeze(),reduce='add')
+                    if nmasks is None:
+                        tVi.scatter_(0,inv, (nprob*tQval).squeeze(),reduce='add')
+                    else:
+                        tVi.scatter_(0,inv[nmask], (nprob*tQval[nmask]).squeeze(),reduce='add')
                     tV_double.append(tVi+F.relu(self.alpha)*nentropy)
                 tV_double = torch.stack(tV_double,dim=1)
             
@@ -477,7 +520,6 @@ class SACOptimizerGeometricNN():
         mean_sampled_Qs = torch.zeros(2,device = self.device)
         for i in range(2):
             self.opt_Q[i].zero_grad()
-            
             sampled_Q = Qvals[i][state['new_block'].ptr[:-1]+actionid].squeeze()
             mean_sampled_Qs[i] = sampled_Q.mean()
             loss = F.huber_loss(sampled_Q,(rewards+gamma*tV).detach())
@@ -495,8 +537,10 @@ class SACOptimizerGeometricNN():
         else:
             minQvals = torch.mean(torch.stack(Qvals,dim=1),dim=1)
         _,argmax= torch.max(minQvals,dim=1)
-        l_p = (-F.relu(self.alpha)*entropy-(minQvals.detach()*prob).sum(dim=1)).mean()
-        
+        if masks is None:
+            l_p = (-F.relu(self.alpha)*entropy-(minQvals.detach()*prob).sum(dim=1)).mean()
+        else:
+            l_p = (-F.relu(self.alpha)*entropy-(minQvals.detach()[mask]*prob).sum(dim=1)).mean()
         self.opt_pol.zero_grad()
         l_p.backward()
         if self.max_norm is not None:
@@ -520,7 +564,7 @@ class SACOptimizerGeometricNN():
             
             wandb.log({self.name+"l_p": l_p.detach().cpu().numpy(),
                        self.name+"rewards":rewards.detach().mean().cpu().numpy(),
-                       self.name+"best_action": argmax,
+                       self.name+"best_action": argmax.cpu().numpy(),
                        self.name+"Qval_0":mean_sampled_Qs[0].detach().cpu().numpy(),
                        self.name+"Qval_1":mean_sampled_Qs[1].detach().cpu().numpy(),
                        self.name+'policy_grad_norm':norm_p.detach().cpu().numpy(),

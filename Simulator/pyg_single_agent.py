@@ -124,30 +124,35 @@ def int2act(action_id,graph):
     graph = graph.cpu()
     action = 'Ph'
     new_block = graph['new_block'].x[action_id].cpu().numpy().astype(int)
+    blocktype, = np.nonzero(new_block[:-1])
+    blocktype = int(blocktype)
+    
     side_node_id = graph['side_sup', 'put_against', 'new_block'].edge_index[0,action_id]
     
-    side_sup = graph['side_sup'].x[side_node_id].numpy().astype(int)
+    side_sup_ori, = np.nonzero(graph['side_sup'].x[side_node_id,:-1].numpy())
+    side_sup_ori = int(side_sup_ori)
+    side_sup_id = int(graph['side_sup'].x[side_node_id,-1].numpy())
     rid = int(graph['robot','choses','new_block'].edge_index[0,action_id].numpy())
     
     if (graph['ground', 'action_desc', 'side_sup'].edge_index[1,:]==side_node_id).any():
         ground_node = graph['ground', 'action_desc', 'side_sup'].edge_index[0,graph['ground', 'action_desc', 'side_sup'].edge_index[1,:]==side_node_id]
         ground_id = ground_node.numpy().astype(int)
         action_params =  {'rid':rid,
-                                'blocktypeid':new_block[0],
-                                'sideblock':new_block[1],
-                                'sidesup':side_sup[1],
+                                'blocktypeid':blocktype,
+                                'sideblock':new_block[-1],
+                                'sidesup':side_sup_id,
                                 'bid_sup':0,
-                                'side_ori':side_sup[0],
-                                'idconsup': ground_id
+                                'side_ori':side_sup_ori,
+                                'idconsup': int(ground_id)
                                  }
     else:
         sup_bid = int(graph['block', 'action_desc', 'side_sup'].edge_index[0,graph['block', 'action_desc', 'side_sup'].edge_index[1,:]==side_node_id].numpy())
         action_params =  {'rid':rid,
-                                'blocktypeid':new_block[0],
-                                'sideblock':new_block[1],
-                                'sidesup':side_sup[1],
+                                'blocktypeid':blocktype,
+                                'sideblock':new_block[-1],
+                                'sidesup':side_sup_id,
                                 'bid_sup':sup_bid+1,
-                                'side_ori':side_sup[0],
+                                'side_ori':side_sup_ori,
                                 'idconsup': 1 #useless
                                  }
     return action,action_params

@@ -124,7 +124,9 @@ class SupervisorRelativeSparse(SupervisorRelative):
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==1)),
                                                   np.sum((block.neigh[:,2]==0) & (block.neigh[:,3]==2)),] for block in ground_blocks+ block_choices])
             #check the genererate_mask_norot function to understand why these parameters
-            self.n_actions = n_robots*(1+len(block_choices))*(int('L' in action_choice) +len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
+            self.n_actions = n_robots*(len(ground_blocks)+len(block_choices))*(int('L' in action_choice) +len(block_choices))*np.max(self.n_side_oriented_sup)*np.max(self.n_side_oriented)*6
+            if not self.last_only:
+                self.n_actions *= n_regions+max_blocks
         
         else:
             self.n_sides = [len(block.neigh) for block in block_choices]
@@ -188,18 +190,35 @@ class SupervisorRelativeSparse(SupervisorRelative):
                 ids, = np.nonzero(mask)
                 actionid = np.random.choice(ids)
         if self.env == 'norot':
-            action,action_params = int2act_norot(actionid,state.graph.n_blocks,self.n_robots,self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.action_choice)
+            action,action_params = int2act_norot(actionid,state.graph.n_blocks,self.n_robots,self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.action_choice,state.graph.n_reg)
         else:
             action,action_params = int2act_sup(actionid,self.n_side,self.last_only,state.graph.n_blocks,self.max_blocks,self.action_choice)
         return action,action_params,actionid,actions_dist.entropy()
         
     def generate_mask(self,state,rid):
         if self.env == 'norot':
-            return generate_mask_no_rot(state.grid, rid, self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.n_robots,self.action_choice,state.type_id)
-        if 'Pl' in self.action_choice:
-            return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
+            if self.last_only:
+                return generate_mask_no_rot(state.grid, rid, self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.n_robots,self.action_choice,state.type_id)
+            else:
+                mask =  generate_mask_anyblock(state.grid, rid, self.n_side_oriented,self.n_side_oriented_sup,self.max_blocks,self.n_robots,state.graph.n_reg,self.action_choice,state.type_id,empty_id=state.empty_id)
+                mask = complete_mask_norot(mask,
+                                           state.grid,
+                                           state.graph.n_blocks,
+                                           self.block_choices,
+                                           self.n_side_oriented,
+                                           self.n_side_oriented_sup,
+                                           self.max_blocks,
+                                           self.n_robots,
+                                           state.graph.n_reg,
+                                           self.action_choice,
+                                           state.type_id,
+                                           last_only=False)
+                return mask
         else:
-            return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
+            if 'Pl' in self.action_choice:
+                return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
+            else:
+                return generate_mask_always_hold(state, rid, self.n_side_oriented,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
 class A2CSupervisorDense(SupervisorRelative):
     def __init__(self,
                  n_robots,
@@ -379,7 +398,7 @@ class SACSupervisorDense(SupervisorRelative):
         if 'Pl' in self.action_choice:
             return generate_mask_dense(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
         else:
-            return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice)
+            return generate_mask_always_hold(state, rid, self.n_side,self.last_only,self.max_blocks,self.n_robots,self.action_choice, )
 class SACSupervisorSparse(SupervisorRelativeSparse):
     def __init__(self,
                  n_robots,
@@ -433,7 +452,7 @@ class A2CSupervisor(SupervisorRelativeSparse):
                  n_robots,
                  block_choices,
                  config,
-                 ground_block = None,
+                 ground_blocks = None,
                  action_choice = ['Pl','Ph','L'],
                  grid_size = [10,10],
                  max_blocks=30,
@@ -449,7 +468,7 @@ class A2CSupervisor(SupervisorRelativeSparse):
         super().__init__(n_robots,
                      block_choices,
                      config,
-                     ground_block = ground_block,
+                     ground_blocks = ground_blocks,
                      action_choice = action_choice,
                      grid_size = grid_size,
                      max_blocks=max_blocks,
@@ -496,11 +515,11 @@ class A2CSupervisor(SupervisorRelativeSparse):
                 ids, = np.nonzero(mask)
                 actionid = np.random.choice(ids)
         if self.env == 'norot':
-            action,action_params = int2act_norot(actionid,state.graph.n_blocks,self.n_robots,self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.action_choice)
+            action,action_params =  int2act_norot(actionid,state.graph.n_blocks,self.n_robots,self.n_side_oriented,self.n_side_oriented_sup,self.last_only,self.max_blocks,self.action_choice,state.graph.n_reg)
         else:
             action,action_params = int2act_sup(actionid,self.n_side,self.last_only,state.graph.n_blocks,self.max_blocks,self.action_choice)
         return action,action_params,actionid,actions_dist.entropy()
-def int2act_norot(action_id,n_block,n_robots, n_side_b,n_side_sup,last_only,max_blocks,action_choices):
+def int2act_norot(action_id,n_block,n_robots, n_side_b,n_side_sup,last_only,max_blocks,action_choices,n_reg):
     if last_only:
         rid, btype_sup, btype, side_sup, side_b,side_ori =np.unravel_index(action_id,
                                                                   (n_robots,
@@ -525,7 +544,39 @@ def int2act_norot(action_id,n_block,n_robots, n_side_b,n_side_sup,last_only,max_
                               }
         return action,action_params
     else:
-        assert False, "not implemented"
+        rid, supid,btype_sup, btype, side_sup, side_b,side_ori =np.unravel_index(action_id,
+                                                                  (n_robots,
+                                                                   max_blocks+n_reg,
+                                                                   n_side_sup.shape[0],
+                                                                   n_side_b.shape[0]+int('L' in action_choices),
+                                                                   np.max(n_side_sup),
+                                                                   np.max(n_side_b),
+                                                                   6))
+        if 'L'in action_choices and btype == n_side_b.shape[0]:
+            action = 'L'
+            action_params = {'rid':rid,
+                              }
+        else:
+            action = 'Ph'
+            if supid < n_reg:
+                action_params =  {'rid':rid,
+                                 'blocktypeid':btype,
+                                 'sideblock':side_b,
+                                 'sidesup':side_sup,
+                                 'bid_sup':0,
+                                 'side_ori':side_ori,
+                                 'idconsup':supid,
+                                  }
+            else:
+                action_params =  {'rid':rid,
+                                 'blocktypeid':btype,
+                                 'sideblock':side_b,
+                                 'sidesup':side_sup,
+                                 'bid_sup':supid-n_reg+1,
+                                 'side_ori':side_ori,
+                                 'idconsup':supid,
+                                  }
+        return action,action_params
 def int2act_sup(action_id,n_side,last_only,n_block,max_blocks,action_choice):
     maxs = max(n_side)
     sums = sum(n_side)
@@ -683,7 +734,6 @@ def generate_mask_no_rot(state,rid,n_side_b, n_side_sup,last_only,max_blocks,n_r
         
     #get the ids of the feasible put actions (note that the are not all hidden)
     if last_only:
-        
         mask = np.zeros((n_robots,
                          n_side_sup.shape[0],
                          n_side_b.shape[0]+int('L' in action_choices),
@@ -692,8 +742,12 @@ def generate_mask_no_rot(state,rid,n_side_b, n_side_sup,last_only,max_blocks,n_r
                          6
                          ),dtype=bool)
         #only keep the blocks that are present
-        placed_block_typeid = placed_block_typeid[placed_block_typeid > -2]
-        type_sup = placed_block_typeid[-1]+1
+        n_type_blocks = n_side_sup.shape[0]-n_side_b.shape[0]
+        placed_block_typeid = placed_block_typeid[placed_block_typeid > -n_type_blocks-1]
+        if placed_block_typeid[-1] < 0:
+            type_sup=-placed_block_typeid[-1]-1
+        else:
+            type_sup = placed_block_typeid[-1]+n_side_sup.shape[0]-n_side_b.shape[0]
         for i,n_side in enumerate(n_side_b):
             for k in range(6):
                 mask[rid,type_sup,i,:n_side_sup[type_sup,k],:n_side[k],k]=True
@@ -788,6 +842,48 @@ def generate_mask(state,rid,n_side,last_only,max_blocks,n_robots,action_choices)
 def args2idx(pos,ori,grid_size):
     idx =  (pos[:,0]*grid_size[1]*6+pos[:,1]*6+ori).astype(int)
     return idx
+def generate_mask_anyblock(grid,rid,n_side_b,n_side_sup,maxblocks,n_robots,n_reg,action_choice,typeblocks,reverse=False,empty_id=-2):
+    mask = np.zeros((n_robots,
+                     maxblocks+n_reg,
+                     n_side_sup.shape[0],
+                     n_side_b.shape[0]+int('L' in action_choice)+int('S' in action_choice),
+                     np.max(n_side_sup),
+                     np.max(n_side_b),
+                     6
+                     ),dtype=bool)
+    
+    #only keep the blocks that are present
+    typeblocks = typeblocks[typeblocks>empty_id]
+    if reverse:
+        typeblocks = typeblocks[::-1]
+    if 'Ph' in action_choice:
+        for i,n_side in enumerate(n_side_b):
+            for j,typesup in enumerate(typeblocks):
+                if typesup ==empty_id:
+                    continue
+                if typesup > 0:
+                    typesup-=empty_id+1
+                else:
+                    typesup = -typesup-1
+                for k in range(6):
+                    mask[rid,j,typesup,i,:n_side_sup[typesup,k],:n_side[k],k]=True
+    return mask.flatten()
+
+def complete_mask_norot(mask,grid,n_blocks,block_choices,n_side_b,n_side_sup,maxblocks,n_robots,n_reg,action_choice,typeblocks,last_only=False):
+    #remove all actions that would end up in a collision
+    possible_actions, = np.nonzero(mask)
+    for actionid in possible_actions:
+        action,action_params = int2act_norot(actionid,n_blocks,n_robots,n_side_b,n_side_sup,last_only,maxblocks,action_choice,n_reg)
+        if action == 'Ph':
+            mask[actionid],*_=grid.connect(block_choices[action_params['blocktypeid']],
+                                             bid=-2,
+                                             sideid=action_params['sideblock'],
+                                             support_sideid=action_params['sidesup'],
+                                             support_bid=action_params['bid_sup'],
+                                             side_ori=action_params['side_ori'],
+                                             idcon=action_params['idconsup'],
+                                             test=True)
+    return mask
 def modular_reward(action,valid,closer,success,fail,config=None,n_sides = None, **kwargs):
     if fail: 
         return config['reward_failure']

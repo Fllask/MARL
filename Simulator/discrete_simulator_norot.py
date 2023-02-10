@@ -63,8 +63,10 @@ class DiscreteSimulator():
         self.ninterface = 1
         self.prev = None
     def setup_anim(self,h=6):
+        plt.close('all')
         self.frames = []
-        self.fig,self.ax = gr.draw_grid(self.grid.occ.shape[:2],color='none',h=h)
+        #self.fig,self.ax = gr.draw_grid(self.grid.occ.shape[:2],color='none',h=h)
+        self.fig,self.ax = gr.draw_grid([30,12],color='none',h=h)
     def add_ground(self,block,pos,ground_type=0):
         valid,_,_=self.grid.put(block,pos,0,floating=True)
         assert valid, "Invalid target placement"
@@ -200,7 +202,7 @@ class DiscreteSimulator():
                 if draw_robots:
                     for i in range(self.graph.n_robot):
                         if i == rid:
-                            state+=gr.draw_robot(self.ax, self.grid, i, [self.grid.shape[0]+1,-2],dash='-')
+                            state+=gr.draw_robot(self.ax, self.grid, i, [self.grid.shape[0]+1,-2],dash='--')
                         else:
                             state+=gr.draw_robot(self.ax, self.grid, i, [self.grid.shape[0]+1,-2])
             if 'sideblock' in action_params.keys():
@@ -221,7 +223,6 @@ class DiscreteSimulator():
                 self.frames[-1] +=gr.draw_action(self.ax,rid,action,blocktype,animated=True,multi=True,**action_params)
     def animate(self):
         anim = gr.animate(self.fig, self.frames)
-        plt.close()
         return anim
     def reset(self):
         '''remove all blocks from the sim'''
@@ -541,10 +542,10 @@ def column_check_right(sim):
     anim = sim.animate()
     return anim
 def arch_check(sim):
-    hexagon = Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7)
+    hexagon = Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.5)
     sim.setup_anim()
-    sim.add_ground(Block([[0,0,1],[-1,0,0]]),[1,0])
-    sim.add_ground(Block([[0,0,1],[-1,0,0]]),[1,7])
+    sim.add_ground(Block([[0,0,1]],muc=0.5),[1,0])
+    #sim.add_ground(Block([[0,0,1],[-1,0,0]]),[1,7])
     sim.add_frame()
     sim.put_rel(None,0,0,0,0,idconsup=0,blocktypeid=0)
     sim.add_frame()
@@ -767,20 +768,20 @@ def generate_mask(state,rid,n_side,last_only,max_blocks,n_robots):
 if __name__ == '__main__':
     print("Start test simulator")
     maxs = [30,10]
-    choices = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.7),#hexagone
-               Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7)]#link
+    choices = [Block([[0,1,1],[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0]],muc=0.5),#hexagone
+               Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.5)]#link
     sim = DiscreteSimulator(maxs,1,choices,2,1000,1000)
     time0 = time.perf_counter()
     
     #grid,bid,ani = scenario1(maxs,n_block=200,maxtry=10000,draw=True)
     #ani = demo_action_rel(sim,0)
     #grid,bid,ani = scenario5(maxs,n_block=600,maxtry=2000,mode='hex',draw=True)
-    #ani = arch_check(sim)
-    graph,out = pyg_graph_test(sim)
+    ani = arch_check(sim)
+    #graph,out = pyg_graph_test(sim)
     time1 = time.perf_counter()
     #print(f"time needed to put {bid} blocks: {time1-time0} ")
-    # if ani is not None:
-    #     gr.save_anim(ani,"test scenario")
+    if ani is not None:
+        gr.save_anim(ani,"test scenario")
     # fig,ax = gr.draw_grid(maxs,h=30,label_points=False,color='none')
     #gr.fill_grid(ax, grid,use_con=True)
     plt.show()

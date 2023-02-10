@@ -444,7 +444,7 @@ def switch_direction(sides):
     return ret
 
 class discret_block_norot():
-    def __init__(self,parts,density=1,muc=0):
+    def __init__(self,parts,density=1,muc=0.5):
         self.parts = np.array(parts)
         self.neigh = outer_sides(self.parts)
         orientation_neig = self.neigh[:,2]*3+self.neigh[:,3]

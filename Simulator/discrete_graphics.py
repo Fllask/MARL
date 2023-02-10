@@ -20,7 +20,8 @@ from physics_scipy import side2corners,get_cm
 s3 =np.sqrt(3)
 base = np.array([[1,0.5],[0,s3/2]])
 
-force_colors = plt.cm.summer(np.linspace(0,0.4,4))
+force_colors = plt.cm.summer(np.linspace(0,0.5,5))
+force_colors = force_colors[[0,2,4,1,3]]
 
 
 robot_colors = plt.cm.Wistia(np.linspace(0.2,1,4))
@@ -38,7 +39,7 @@ def draw_grid(maxs,label_points=False,steps=1,color='darkslategrey',h=6,w=None,l
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
     #draw the horizontal lines
-    y = np.arange(ylim[0],ylim[1]+0.1,s3/2*steps)
+    y = np.arange(ylim[0],ylim[1],s3/2*steps)
     y = np.stack([y,y])
     ax.plot(np.reshape(xlim,(2,1)),y,color=color,linewidth=linewidth)
     #draw the 60 degrees lines
@@ -117,13 +118,13 @@ def draw_put_rel(ax,
                  multi=False):
     
     if multi:
-        arts = draw_block(ax, blocktype, color=robot_colors[rid],alpha=0.5,animated=animated)
+        arts = draw_block(ax, blocktype, color='none',animated=animated)
         if hold:
             #the block was already moved by draw_block
             parts = blocktype.parts
             sides = np.concatenate([np.tile(parts,(3,1)),np.repeat(np.arange(3),parts.shape[0])[...,None]],axis=1)
             for side in sides:
-                arts+= draw_side(ax, side,color='k',linewidth=0.5,animated=animated)
+                arts+= draw_side(ax, side,color=robot_colors[rid],linewidth=3,alpha=0.5,animated=animated,zorder=99)
                 
     else:
         if empty:
@@ -133,7 +134,7 @@ def draw_put_rel(ax,
                 parts = blocktype.parts
                 sides = np.concatenate([np.tile(parts,(3,1)),np.repeat(np.arange(3),parts.shape[0])[...,None]],axis=1)
                 for side in sides:
-                    arts+= draw_side(ax, side,color=robot_colors[rid],linewidth=3,animated=animated)
+                    arts+= draw_side(ax, side,color=robot_colors[rid],linewidth=3,animated=animated,zorder=99)
         else:
             arts = draw_block(ax, blocktype, color=robot_colors[rid],animated=animated)
             if hold:
@@ -179,7 +180,7 @@ def draw_remove(ax,rid,bid=None, pos=None,ori=None,animated=False,multi=False):
     return arts
 def draw_leave(ax,rid,animated=False,multi=False):
     if multi:
-        art = ax.text(0,ax.get_ylim()[1]-1-rid,f"Robot {rid} tried to leave",color = robot_colors(rid),animated=animated)
+        art = ax.text(0,ax.get_ylim()[1]-1-rid,f"Robot {rid} tried to leave",color = robot_colors[rid],animated=animated)
     else:
         art = ax.text(0,ax.get_ylim()[1]-1,f"Robot {rid} tried to leave",color = robot_colors[rid],animated=animated)
     return [art]
@@ -209,7 +210,7 @@ def fill_triangle(ax,coord,animated=False,text=None,fontsize = 7,**colorkw):
                 fontsize=fontsize) for i in range(coord.shape[0])]
     [ax.add_artist(a) for a in art]
     return art
-def draw_side(ax,coord,color=None,animated=False,linewidth=2):
+def draw_side(ax,coord,color=None,animated=False,linewidth=2,zorder=None,alpha=None):
     if coord[3]==0:
         p1 = coord[:2]
         p2 = coord[:2]+[1,0]
@@ -226,7 +227,7 @@ def draw_side(ax,coord,color=None,animated=False,linewidth=2):
     p2xy = base @ p2
     #corners = side2corners(np.expand_dims(coord[:-1],0),security_factor=0.5)
     
-    art = ax.plot([p1xy[0],p2xy[0]],[p1xy[1],p2xy[1]],color=color,alpha=1,linewidth=linewidth,animated=animated,solid_capstyle='round')
+    art = ax.plot([p1xy[0],p2xy[0]],[p1xy[1],p2xy[1]],color=color,alpha=alpha,linewidth=linewidth,animated=animated,solid_capstyle='round',zorder=zorder)
     
     
     #art += [ax.scatter(corners[0,:,0],corners[0,:,1],color=color)]
@@ -273,7 +274,7 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,max_
                 else:
                     scale = uniform_scale
                 if failed%6 < 4:
-                    arts+=[plt.arrow(cm[0],
+                    arts+=[ax.arrow(cm[0],
                                     cm[1],
                                     -Aeq_block[0,failed]*f_stick*scale,
                                     -Aeq_block[1,failed]*f_stick*scale,
@@ -302,14 +303,14 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,max_
                     Aeq_block=force_bag.Aeq[force_bag.roweqid==block]
                     pos =posx[failed]
                     scale = 1/ np.max(np.append(x[~np.all(Aeq_block==0,axis=0)],force_bag.beq[force_bag.roweqid==block][1]))*max_norm
-                    arts+=[plt.arrow(pos[0],
+                    arts+=[ax.arrow(pos[0],
                                       pos[1],
                                       -Aeq_block[0,failed]*f_stick*scale,
                                       -Aeq_block[1,failed]*f_stick*scale,
                                       color='r',
                                       width=0.1,
                                       animated= animated,
-                                      zorder=100)]
+                                      zorder=102)]
     #draw the forces from the robots:
     if rids is None:
         rids = np.arange(force_bag.nr)
@@ -373,7 +374,7 @@ def draw_forces(ax,grid,force_bag,bids=None,rids = None, uniform_scale=1/12,max_
             #compute the combination of the locations
             if not np.all(Aeq_block[:,idxx]==0) and fs > 1e-6:
                 pos = (x[idxx]*posx[idxx]+x[idxx+3]*posx[idxx+3])/fs
-                arts+=[plt.arrow(pos[0],
+                arts+=[ax.arrow(pos[0],
                                   pos[1],
                                   Aeq_block[0,idxx]*fs*scale,
                                   Aeq_block[1,idxx]*fs*scale,
@@ -631,7 +632,7 @@ def fill_grid(ax,
             coords=np.nonzero(grid.hold==i)
             coords = np.array(coords).T
             cm = get_cm(coords)
-            art =Circle(cm,0.3,color = robot_colors[i],animated=animated)
+            art =Circle(cm,0.3,color = robot_colors[i],animated=animated,zorder=99)
             ax.add_artist(art)
             arts+=[art]
     if graph is not None:
@@ -641,7 +642,6 @@ def fill_grid(ax,
     return arts
 def animate(fig,arts_list,sperframe= 0.1):
     ani = animation.ArtistAnimation(fig, arts_list, interval=sperframe*1000, blit=True)
-    plt.close(fig)
     #HTML(ani.to_jshtml())
     return ani
 def draw_block(ax,block, pos=None,ori=None,draw_neigh=False,highlight_ref = False,animated=False, **colorkw):
@@ -691,7 +691,7 @@ def draw_robot(ax,grid,robotid,base,animated=False,max_dist = None,right=True,da
     [ax.add_artist(art)for art in arts]
     arts+= ax.plot([base[0],base[0]+np.cos(a1+direction)*l_seg,base[0]+(np.cos(a1+direction)+np.cos(direction))*l_seg,base[0]+(np.cos(a1+direction)+np.cos(direction)+np.cos(direction+a2))*l_seg],
                    [base[1],base[1]+np.sin(a1+direction)*l_seg,base[1]+(np.sin(a1+direction)+np.sin(direction))*l_seg,base[1]+(np.sin(a1+direction)+np.sin(direction)+np.sin(direction+a2))*l_seg],
-                   color = robot_colors[robotid],animated=animated,linewidth=10,linestyle=dash)
+                   color = robot_colors[robotid],animated=animated,linewidth=10,linestyle=dash,zorder=98)
     
     return arts
     

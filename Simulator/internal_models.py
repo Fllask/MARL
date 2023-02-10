@@ -521,8 +521,10 @@ class SACDenseOptimizer():
         self.opt_pol = torch.optim.NAdam(self.pol.parameters(),lr=lr*self.pol_over_val,weight_decay=wd)
         self.opt_Q = [torch.optim.NAdam(Q.parameters(),lr=lr,weight_decay=wd) for Q in self.Qs]
         self.target_entropy = config['opt_target_entropy']
-        self.alpha = torch.tensor([1.],device = policy.device,requires_grad=True)
-        self.opt_alpha = torch.optim.NAdam([self.alpha],lr=1e-3)
+        
+        self.alpha = torch.tensor([config.get('opt_init_alpha') or 1.],device = config['torch_device'],requires_grad=True)
+        self.opt_alpha = torch.optim.NAdam([self.alpha],lr=config.get('opt_lr_alpha') or 1e-3)
+        
         self.beta = 0.5 #same as in paper
         self.clip_r = 0.5 #same as in paper
         self.step = 0
@@ -1245,7 +1247,7 @@ class A2CSharedOptimizer():
             next_v[~np.any(nmask,axis=1)]=0
         Qval = torch.tensor(rewards).to(next_v.device) + gamma*next_v
         if self.model.use_wandb:
-            wandb.log({'value_est': v.mean(), 'target_value_est':Qval.mean(), 'rewards':rewards.mean()},step=self.step)
+            wandb.log({'V': v.mean(), 'tV':next_v.mean(), 'rewards':rewards.mean()},step=self.step)
         #compute the critique loss
         l_v = self.model.loss_val(v,Qval)
         advantage = Qval-v.detach()
