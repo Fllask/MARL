@@ -485,7 +485,13 @@ def gen_scenario(h,draw_forces=False,name="",turn=0,colormap='force',linewidth=1
     sim = DiscreteSimulator(maxs, 2, [hexagon], 2, 30, 30)
     sim.add_ground(ground,[9,0])
     sim.add_ground(ground, [3,0])
-    
+    fig,ax = gr.draw_grid(maxs,h=h,color='none',label_points = False)
+    gr.fill_grid(ax,
+                 sim.grid,
+                 forces_bag=sim.ph_mod,
+                 draw_arrows = draw_forces,
+                 linewidth=linewidth)
+    plt.savefig(f'../graphics/scenario/{name}empty_{colormap}.png')
     sim.put_rel(hexagon, 0, 0, 0, 0,idconsup=0)
     sim.put_rel(hexagon, 0, 0, 0, 0,idconsup=1)
     
@@ -805,7 +811,7 @@ if __name__ == "__main__":
     # gen_scenario(8,draw_forces=True,name="arrow_",turn=0,linewidth=4,draw_robot=False)
     # gen_scenario(8,draw_forces=True,name="arrow_fail_",turn=1,linewidth=4,draw_robot=False)
     # gen_scenario(8,draw_forces=False,name="robot_",turn=0,linewidth=4,draw_robot=True)
-    # gen_scenario(8,draw_forces=False,name="robot_fail_",turn=1,linewidth=4,draw_robot=True)
+    gen_scenario(8,draw_forces=False,name="robot_fail_",turn=1,linewidth=4,draw_robot=True)
     # gen_example_robots(8,0)
     #gen_base_action_set(h=12)
-    draw_dist(8)
+    # draw_dist(8)

@@ -14,10 +14,10 @@ import matplotlib.pyplot as plt
 def create_gym(config):
     
     #overwrite the action choice method:
-    hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.5)
-    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.5) 
-    linkl = Block([[0,0,0],[0,1,1],[1,0,0],[0,1,0],[0,0,1],[-1,1,1]],muc=0.5) 
-    linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.5)
+    hexagon = Block([[1,0,0],[1,1,1],[1,1,0],[0,2,1],[0,1,0],[0,1,1]],muc=0.7)
+    linkr = Block([[0,0,0],[0,1,1],[1,0,0],[1,0,1],[1,1,1],[0,1,0]],muc=0.7) 
+    linkl = Block([[0,0,0],[0,1,1],[1,0,0],[0,1,0],[0,0,1],[-1,1,1]],muc=0.7) 
+    linkh = Block([[0,0,0],[0,1,1],[1,0,0],[-1,2,1],[0,1,0],[0,2,1]],muc=0.7)
     target = Block([[0,0,1]])
     gym = Gym(config_sparse_SAC,
               agent_type=SACSupervisorSparse,
@@ -83,10 +83,14 @@ if __name__ == "__main__":
             'gap_range': [1,20],
             }
     gym = create_gym(config_sparse_SAC)
-    gym = load_agent("1miosteps.pickle",gym,explore=False)
+    #gym = load_agent("1miosteps.pickle",gym,explore=False)
+    gym = load_agent("newbestlater.pickle",gym,explore=False)
+    f=70
+    # gym.sim.ph_mod.set_max_forces(0,Fx=[-f,f],Fy=[-f,f])
+    # gym.sim.ph_mod.set_max_forces(1,Fx=[-f,f],Fy=[-f,f])
     alterations=None
-    alterations=np.array([[5,0]])
-    rewards, anim = gym.exploit(17,alterations= alterations,n_alter=1,h=12,draw_robots=False)
+    # alterations=np.array([[5,0]])
+    rewards, anim = gym.exploit(14,alterations= alterations,n_alter=1,h=6,draw_robots=False,auto_leave=True)
     gr.save_anim(anim,"exploit",ext='html')
     gr.save_anim(anim,"exploit",ext='gif')
     #name = 'struct8_a2'

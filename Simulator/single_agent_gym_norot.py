@@ -335,7 +335,7 @@ class ReplayDiscreteGymSupervisor():
         time_draw=0
         use_mask = self.config['ep_use_mask']
         rewards_ar = np.zeros((self.n_robots,max_steps))
-        self.sim =copy.deepcopy(self.setup)
+        #self.sim =copy.deepcopy(self.setup)
         gap=gap
         t0s = time.perf_counter()
         tar = Block([[i,0,1] for i in range(self.sim.grid.shape[0]-gap-1)],muc=0.7)
